@@ -1,3 +1,4 @@
 .env
+venv/
+rust_core/target/
 __pycache__/
-*.pem
