@@ -1,0 +1,4 @@
+requests
+openai
+py-clob-client
+python-dotenv
