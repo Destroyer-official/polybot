@@ -1,4 +1,4 @@
-requests
+https://github.com/Destroyer-official/polybotrequests
 openai
 py-clob-client
 python-dotenv
