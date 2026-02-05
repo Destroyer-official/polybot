@@ -1,4 +1,48 @@
+# Environment and secrets
 .env
+*.env
+!.env.example
+
+# Python
 venv/
-rust_core/target/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.hypothesis/
+
+# Rust
+rust_core/target/
+Cargo.lock
+
+# Logs
+logs/*.log
+logs/*.json
+!logs/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config
+config/config.yaml
+!config/config.example.yaml
+
+# Database
+*.db
+*.sqlite
+*.sqlite3

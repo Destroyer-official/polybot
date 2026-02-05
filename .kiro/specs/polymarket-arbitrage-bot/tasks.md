@@ -1,0 +1,502 @@
+# Implementation Plan: Polymarket Arbitrage Bot
+
+## Overview
+
+This implementation plan breaks down the Polymarket arbitrage bot into discrete coding tasks that build incrementally. The system will be implemented in Python 3.11+ with a Rust core module for performance-critical operations. Each task builds on previous work, with property-based tests integrated throughout to catch errors early.
+
+## Tasks
+
+- [x] 1. Set up project structure and core configuration
+  - Create directory structure: src/, tests/, rust_core/, config/, logs/
+  - Set up Python virtual environment with dependencies: web3.py, py-clob-client, hypothesis, pytest, prometheus-client, boto3
+  - Create config.py with Config dataclass supporting environment variables and YAML
+  - Implement configuration validation on startup
+  - Set up logging infrastructure with structured JSON logging to CloudWatch
+  - _Requirements: 20.1, 20.2, 20.3, 20.4_
+
+- [x] 2. Implement Dynamic Fee Calculator with Rust core
+  - [x] 2.1 Create Rust module for fee calculation
+    - Implement 2025 dynamic fee formula in Rust: fee = max(0.001, 0.03 (1.0 - abs(2.0 price - 1.0)))
+    - Add fee caching with HashMap
+    - Expose Python bindings using PyO3/maturin
+    - _Requirements: 2.1, 2.5_
+  - [x] 2.2 Write property test for fee calculation accuracy
+    - Property 1: Dynamic Fee Calculation Accuracy
+    - Validates: Requirements 1.7, 2.1
+  - [x] 2.3 Write property test for fee caching
+    - Property 6: Fee Calculation Caching
+    - Validates: Requirements 2.5
+  - [x] 2.4 Write unit tests for fee edge cases
+    - Test fee at 50% odds (should be ~3%)
+    - Test fee at 0% and 100% odds (should be ~0.1%)
+    - _Requirements: 2.2, 2.3_
+
+- [x] 3. Implement data models and validation
+  - [x] 3.1 Create core data model classes
+    - Implement Market dataclass with validation
+    - Implement Opportunity dataclass
+    - Implement TradeResult dataclass
+    - Implement SafetyDecision dataclass
+    - Implement HealthStatus dataclass
+    - Use Decimal types for all price/amount fields
+    - _Requirements: 17.5, 1.1_
+  - [x] 3.2 Write property test for Decimal price precision
+    - Property 50: Decimal Price Precision
+    - Validates: Requirements 17.5
+  - [x] 3.3 Write unit tests for data model validation
+    - Test Market.is_crypto_15min() filtering
+    - Test Market.parse_strike_price() extraction
+    - Test invalid data handling
+    - _Requirements: 17.4, 17.6_
+
+- [x] 4. Implement Transaction Manager with nonce handling
+  - [x] 4.1 Create TransactionManager class
+    - Implement nonce tracking with pending queue
+    - Implement send_transaction with nonce management
+    - Implement wait_for_confirmation with timeout
+    - Implement resubmit_stuck_transaction with gas escalation
+    - Limit pending transactions to 5 maximum
+    - _Requirements: 18.1, 18.2, 18.4, 18.5_
+  - [x] 4.2 Write property test for nonce management
+    - Property 51: Nonce Management
+    - Validates: Requirements 18.1, 18.2, 18.5
+  - [x] 4.3 Write property test for pending transaction limit
+    - Property 19: Pending Transaction Limit Invariant
+    - Validates: Requirements 6.5, 18.4
+  - [x] 4.4 Write unit tests for stuck transaction handling
+    - Test resubmission with 10% higher gas
+    - Test timeout handling
+    - _Requirements: 16.4, 18.3_
+
+- [x] 5. Implement Position Merger
+  - [x] 5.1 Create PositionMerger class
+    - Initialize with Web3 and CTF contract
+    - Implement merge_positions with balance verification
+    - Implement gas estimation
+    - Verify $1.00 USDC redemption after merge
+    - _Requirements: 1.5, 1.6_
+  - [x] 5.2 Write property test for merge redemption invariant
+    - Property 4: Position Merge Redemption Invariant
+    - Validates: Requirements 1.6
+  - [x] 5.3 Write unit tests for merge error handling
+    - Test insufficient balance error
+    - Test contract revert handling
+    - _Requirements: 1.5_
+
+- [x] 6. Implement Order Manager with FOK orders
+  - [x] 6.1 Create OrderManager class
+    - Implement create_fok_order with 0.1% slippage tolerance
+    - Implement submit_atomic_pair for YES/NO orders
+    - Implement cancel_order
+    - Verify both orders fill or neither fills
+    - _Requirements: 6.1, 6.2, 1.3_
+  - [x] 6.2 Write property test for atomic order execution
+    - Property 5: Atomic Order Execution
+    - Validates: Requirements 1.4, 6.3, 6.1
+  - [x] 6.3 Write property test for FOK slippage tolerance
+    - Property 17: FOK Order Slippage Tolerance
+    - Validates: Requirements 6.2
+  - [x] 6.4 Write property test for fill price validation
+    - Property 18: Fill Price Validation
+    - Validates: Requirements 6.4
+
+- [x] 7. Checkpoint - Ensure core execution components work
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 8. Implement AI Safety Guard
+  - [x] 8.1 Create AISafetyGuard class
+    - Implement validate_trade with NVIDIA API integration
+    - Implement check_nvidia_api with 2-second timeout
+    - Implement multilingual YES/NO parsing (English, Russian, French, Spanish)
+    - Implement fallback_heuristics (balance, gas, pending TX checks)
+    - Implement volatility monitoring (5% threshold)
+    - Implement ambiguous keyword detection
+    - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6_
+  - [x] 8.2 Write property test for multilingual parsing
+    - Property 21: Multilingual Safety Response Parsing
+    - Validates: Requirements 7.2
+  - [x] 8.3 Write property test for AI timeout handling
+    - Property 22: AI Safety Timeout Handling
+    - Validates: Requirements 7.3
+  - [x] 8.4 Write property test for fallback heuristics
+    - Property 23: AI Safety Fallback Heuristics
+    - Validates: Requirements 7.4
+  - [x] 8.5 Write property test for volatility halt
+    - Property 24: High Volatility Trading Halt
+    - Validates: Requirements 7.5
+  - [x] 8.6 Write property test for ambiguous market filtering
+    - Property 16: Ambiguous Market Filtering
+    - Validates: Requirements 5.4, 7.6
+
+- [x] 9. Implement Kelly Position Sizer
+  - [x] 9.1 Create KellyPositionSizer class
+    - Implement calculate_position_size using Kelly Criterion formula
+    - Implement 5% bankroll cap
+    - Implement small bankroll fixed sizing ($0.10-$1.00 for <$100)
+    - Implement large bankroll proportional sizing (up to $5.00 for >$100)
+    - Implement bankroll recalculation every 10 trades
+    - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
+  - [x] 9.2 Write property test for Kelly Criterion calculation
+    - Property 35: Kelly Criterion Position Sizing
+    - Validates: Requirements 11.1
+  - [x] 9.3 Write property test for position size cap
+    - Property 36: Kelly Position Size Cap
+    - Validates: Requirements 11.2
+  - [x] 9.4 Write property test for small bankroll sizing
+    - Property 37: Small Bankroll Fixed Sizing
+    - Validates: Requirements 11.3
+  - [x] 9.5 Write property test for large bankroll sizing
+    - Property 38: Large Bankroll Proportional Sizing
+    - Validates: Requirements 11.4
+
+- [x] 10. Implement Internal Arbitrage Engine
+  - [x] 10.1 Create InternalArbitrageEngine class
+    - Implement scan_opportunities using Rust fee calculator
+    - Implement calculate_profit with fee accounting
+    - Implement execute with AI safety checks and Kelly sizing
+    - Filter opportunities below 0.5% profit threshold
+    - _Requirements: 1.1, 1.2, 2.4_
+  - [x] 10.2 Write property test for arbitrage detection
+    - Property 2: Internal Arbitrage Detection
+    - Validates: Requirements 1.1, 1.2
+  - [x] 10.3 Write property test for profit calculation
+    - Property 3: Arbitrage Profit Calculation
+    - Validates: Requirements 2.4
+
+- [x] 11. Implement Cross-Platform Arbitrage Engine
+  - [x] 11.1 Create CrossPlatformArbitrageEngine class
+    - Initialize with Polymarket and Kalshi clients
+    - Implement scan_opportunities comparing equivalent markets
+    - Implement execute with atomic cross-platform orders
+    - Account for withdrawal fees and settlement times
+    - _Requirements: 3.2, 3.3, 3.4, 3.6_
+  - [x] 11.2 Write property test for cross-platform detection
+    - Property 7: Cross-Platform Arbitrage Detection
+    - Validates: Requirements 3.2, 3.3
+  - [x] 11.3 Write property test for cross-platform atomicity
+    - Property 8: Cross-Platform Atomic Execution
+    - Validates: Requirements 3.4, 3.5
+  - [x] 11.4 Write property test for cross-platform profit accounting
+    - Property 9: Cross-Platform Profit Accounting
+    - Validates: Requirements 3.6
+
+- [x] 12. Implement Latency Arbitrage Engine
+  - [x] 12.1 Create LatencyArbitrageEngine class
+    - Initialize with CEX WebSocket feeds (Binance, Coinbase, Kraken)
+    - Implement monitor_price_movements streaming CEX prices
+    - Implement check_polymarket_lag detecting 1%+ lag
+    - Implement execute with sub-150ms target latency
+    - Skip opportunities when volatility > 5% in 1 minute
+    - _Requirements: 4.2, 4.3, 4.4, 4.6_
+  - [x] 12.2 Write property test for latency arbitrage trigger
+    - Property 10: Latency Arbitrage Trigger
+    - Validates: Requirements 4.2
+  - [x] 12.3 Write property test for direction calculation
+    - Property 11: Latency Arbitrage Direction Calculation
+    - Validates: Requirements 4.3
+  - [x] 12.4 Write property test for volatility filter
+    - Property 12: Volatility-Based Latency Arbitrage Filter
+    - Validates: Requirements 4.6
+
+- [x] 13. Implement Resolution Farming Engine
+  - [x] 13.1 Create ResolutionFarmingEngine class
+    - Implement scan_closing_markets (< 2 minutes to close)
+    - Implement verify_outcome_certainty using CEX data
+    - Implement execute buying 97-99¢ positions
+    - Limit position size to 2% of bankroll
+    - Skip markets with ambiguous resolution criteria
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
+  - [x] 13.2 Write property test for resolution farming detection
+    - Property 13: Resolution Farming Opportunity Detection
+    - Validates: Requirements 5.1, 5.2
+  - [x] 13.3 Write property test for outcome verification
+    - Property 14: Resolution Farming Outcome Verification
+    - Validates: Requirements 5.3
+  - [x] 13.4 Write property test for position size limit
+    - Property 15: Resolution Farming Position Size Limit
+    - Validates: Requirements 5.5
+
+- [x] 14. Checkpoint - Ensure all strategy engines work
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [x] 15. Implement Fund Manager
+  - [x] 15.1 Create FundManager class
+    - Implement check_balance for EOA and Proxy wallets
+    - Implement auto_deposit when balance < $50
+    - Implement auto_withdraw when balance > $500
+    - Implement cross_chain_deposit with 1inch API integration
+    - Support Ethereum, Polygon, Arbitrum, Optimism
+    - Log all deposit/withdrawal transactions
+    - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7_
+  - [x] 15.2 Write property test for auto-deposit trigger
+    - Property 25: Auto-Deposit Trigger
+    - Validates: Requirements 8.1, 8.2
+  - [x] 15.3 Write property test for auto-withdrawal trigger
+    - Property 26: Auto-Withdrawal Trigger
+    - Validates: Requirements 8.3, 8.4
+  - [x] 15.4 Write property test for multi-chain support
+    - Property 27: Multi-Chain Deposit Support
+    - Validates: Requirements 8.5
+
+- [x] 16. Implement Monitoring System with real-time dashboard
+  - [x] 16.1 Create MonitoringSystem class
+    - Initialize Prometheus metrics (counters, gauges, histograms)
+    - Implement record_trade updating all metrics
+    - Implement record_error with context logging
+    - Implement send_alert using SNS
+    - Expose metrics on port 9090
+    - _Requirements: 13.1, 13.2, 13.5_
+  - [x] 16.2 Implement real-time console dashboard
+    - Create StatusDashboard class with continuous updates
+    - Display system status, uptime, mode, circuit breaker status
+    - Display EOA/Proxy/Total balances in real-time
+    - Display portfolio performance metrics (trades, win rate, profit, gas, Sharpe ratio)
+    - Display current scan details with opportunity information
+    - Display gas prices, pending TXs, RPC status, block number
+    - Display last 5 trades with timestamps and results
+    - Display fund management status and countdowns
+    - Display safety check status and error counters
+    - Use color coding (green/yellow/red/blue) for readability
+    - Update dashboard every 1 second
+    - _Requirements: 21.1, 21.2, 21.3, 21.4, 21.5, 21.8, 21.9, 21.10, 21.11, 21.13, 21.15_
+  - [x] 16.3 Implement verbose debug logging
+    - Log every operation with millisecond timestamps
+    - Log market scanning, fee calculations, AI checks, order creation
+    - Log transaction submission, position merging, balance updates
+    - Log API response times, transaction hashes, success/failure
+    - Include full context in error logs (stack trace, recovery action)
+    - _Requirements: 21.6, 21.7, 21.12_
+  - [x] 16.4 Implement heartbeat logging
+    - Log comprehensive status every 60 seconds
+    - Include balances, network status, performance, safety status
+    - Include detected issues and alerts
+    - _Requirements: 9.6, 21.14_
+  - [x] 16.5 Write property test for real-time dashboard updates
+    - Property 56: Real-Time Dashboard Updates
+    - Validates: Requirements 21.1, 21.2
+  - [x] 16.6 Write property test for portfolio metrics accuracy
+    - Property 57: Portfolio Metrics Accuracy
+    - Validates: Requirements 21.3
+  - [x] 16.7 Write property test for opportunity detail completeness
+    - Property 58: Opportunity Detail Completeness
+    - Validates: Requirements 21.4
+  - [x] 16.8 Write property test for debug log verbosity
+    - Property 59: Debug Log Verbosity
+    - Validates: Requirements 21.6, 21.7
+  - [x] 16.9 Write property test for error context logging
+    - Property 60: Error Context Logging
+    - Validates: Requirements 21.12
+
+- [x] 17. Implement error handling and recovery
+  - [x] 17.1 Create retry decorator with exponential backoff
+    - Implement @retry_with_backoff decorator
+    - Support 1s, 2s, 4s, 8s, max 60s delays
+    - Maximum 5 retry attempts
+    - _Requirements: 9.2, 16.1_
+  - [x] 17.2 Implement RPC endpoint failover
+    - Detect RPC unavailability
+    - Automatically switch to backup endpoints
+    - _Requirements: 16.2_
+  - [x] 17.3 Implement gas price retry escalation
+    - Detect insufficient gas errors
+    - Increase gas price by 10% and retry
+    - _Requirements: 16.3_
+  - [x] 17.4 Implement circuit breaker
+    - Track consecutive failures
+    - Open circuit after 10 failures
+    - Halt trading and send critical alert
+    - Require manual reset
+    - _Requirements: 16.6_
+  - [x] 17.5 Write property test for exponential backoff
+    - Property 29: Network Error Exponential Backoff
+    - Validates: Requirements 9.2, 16.1
+  - [x] 17.6 Write property test for RPC failover
+    - Property 43: RPC Endpoint Failover
+    - Validates: Requirements 16.2
+  - [x] 17.7 Write property test for gas escalation
+    - Property 44: Gas Price Retry Escalation
+    - Validates: Requirements 16.3
+  - [x] 17.8 Write property test for circuit breaker
+    - Property 46: Circuit Breaker Activation
+    - Validates: Requirements 16.6
+
+- [x] 18. Implement market data parsing and validation
+  - [x] 18.1 Create market data parser
+    - Parse JSON from CLOB API to Market objects
+    - Validate all required fields
+    - Skip invalid markets with warnings
+    - Filter to 15-minute crypto markets only
+    - Exclude expired markets
+    - _Requirements: 17.1, 17.2, 17.3, 17.4, 17.6_
+  - [x] 18.2 Write property test for market parsing
+    - Property 47: Market Data Parsing and Validation
+    - Validates: Requirements 17.1, 17.2
+  - [x] 18.3 Write property test for invalid market handling
+    - Property 48: Invalid Market Handling
+    - Validates: Requirements 17.3
+  - [x] 18.4 Write property test for crypto market filtering
+    - Property 49: Crypto Market Filtering
+    - Validates: Requirements 17.4, 17.6
+
+- [x] 19. Implement trade history and reporting
+  - [x] 19.1 Create SQLite database for trade history
+    - Create trades table with all trade details
+    - Implement insert_trade method
+    - Implement query methods for reporting
+    - _Requirements: 19.4_
+  - [x] 19.2 Implement trade statistics tracking
+    - Track running totals (trades, profit, gas cost)
+    - Calculate win rate, profit factor, Sharpe ratio
+    - Update after every trade
+    - _Requirements: 19.1, 19.2_
+  - [x] 19.3 Implement report generation
+    - Create CLI command for daily/weekly/monthly reports
+    - Calculate performance metrics
+    - Export to CSV/JSON
+    - _Requirements: 19.3, 19.5_
+  - [x] 19.4 Write property test for trade statistics
+    - Property 52: Trade Statistics Maintenance
+    - Validates: Requirements 19.2
+  - [x] 19.5 Write property test for trade persistence
+    - Property 53: Trade History Persistence
+    - Validates: Requirements 19.4
+
+- [x] 20. Implement Main Orchestrator
+  - [x] 20.1 Create MainOrchestrator class
+    - Initialize all components with configuration
+    - Implement main event loop scanning markets every 1-5 seconds
+    - Implement heartbeat_check every 60 seconds
+    - Implement graceful shutdown on SIGTERM/SIGINT
+    - Coordinate strategy engines, safety checks, fund management
+    - _Requirements: 9.1, 9.6_
+  - [x] 20.2 Implement gas price monitoring
+    - Check gas price before each trade
+    - Halt trading if gas > 800 gwei
+    - Resume when gas normalizes
+    - _Requirements: 6.6_
+  - [x] 20.3 Implement state persistence
+    - Save state to disk periodically
+    - Restore state on restart
+    - _Requirements: 9.3_
+  - [x] 20.4 Write property test for gas price halt
+    - Property 20: Gas Price Trading Halt
+    - Validates: Requirements 6.6
+  - [x] 20.5 Write property test for state persistence
+    - Property 30: State Persistence Across Restarts
+    - Validates: Requirements 9.3
+  - [x] 20.6 Write property test for heartbeat failure circuit breaker
+    - Property 33: Heartbeat Failure Circuit Breaker
+    - Validates: Requirements 9.7
+
+- [x] 21. Checkpoint - Ensure full system integration works
+  - Ensure all tests pass, ask the user if questions arise.
+
+- [ ] 22. Implement DRY_RUN mode
+  - [ ] 22.1 Add DRY_RUN configuration flag
+    - Skip all blockchain transactions when enabled
+    - Log all intended actions prominently
+    - Simulate trade execution with realistic outcomes
+    - _Requirements: 12.4, 12.5, 20.5_
+  - [x] 22.2 Write property test for DRY_RUN transaction prevention
+    - Property 55: DRY_RUN Mode Transaction Prevention
+    - Validates: Requirements 20.5
+
+- [x] 23. Implement security features
+  - [x] 23.1 Integrate AWS Secrets Manager
+    - Retrieve private keys from Secrets Manager
+    - Use IAM roles for authentication
+    - Never log private keys
+    - _Requirements: 14.1, 14.3_
+  - [x] 23.2 Implement wallet address verification
+    - Verify private key matches expected address on startup
+    - _Requirements: 14.4_
+  - [x] 23.3 Write property test for private key logging prevention
+    - Property 41: Private Key Logging Prevention
+    - Validates: Requirements 14.3
+  - [x] 23.4 Write property test for wallet verification
+    - Property 42: Wallet Address Verification
+    - Validates: Requirements 14.4
+
+- [x] 24. Create deployment automation
+  - [x] 24.1 Create Terraform/CloudFormation templates
+    - Define EC2 instance (t3.micro or c7i.large)
+    - Define security groups (allow 9090 for Prometheus)
+    - Define IAM roles for Secrets Manager and CloudWatch
+    - Define CloudWatch log groups
+    - Define SNS topics for alerts
+    - _Requirements: 15.1, 15.2_
+  - [x] 24.2 Create deployment scripts
+    - Install Python 3.11+, Rust toolchain
+    - Install dependencies from requirements.txt
+    - Build Rust core module
+    - Configure systemd service
+    - Set up log rotation
+    - _Requirements: 15.3, 15.4_
+  - [x] 24.3 Create health check script
+    - Verify all components initialized
+    - Check API connectivity
+    - Verify wallet balance
+    - Report deployment status
+    - _Requirements: 15.5_
+
+- [x] 25. Create comprehensive integration tests
+  - [x] 25.1 Write integration test for full arbitrage flow
+    - Test detection → AI safety → order execution → merge → profit
+    - Use mocked external services
+    - Verify end-to-end flow
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6_
+  - [x] 25.2 Write integration test for fund management flow
+    - Test low balance → auto-deposit → trading → high balance → auto-withdraw
+    - _Requirements: 8.1, 8.2, 8.3, 8.4_
+  - [x] 25.3 Write integration test for error recovery
+    - Test network error → retry → success
+    - Test RPC failure → failover → success
+    - Test stuck transaction → resubmit → success
+    - _Requirements: 9.2, 16.1, 16.2, 16.4_
+
+- [x] 26. Create backtesting framework
+  - [x] 26.1 Implement historical data loader
+    - Load market data from CSV/database
+    - Support date range filtering
+    - _Requirements: 12.1_
+  - [x] 26.2 Implement backtest simulator
+    - Simulate order execution with realistic fills
+    - Calculate slippage and fees
+    - Track portfolio over time
+    - _Requirements: 12.2_
+  - [x] 26.3 Implement backtest report generator
+    - Calculate win rate, profit, drawdown, Sharpe ratio
+    - Generate detailed report
+    - Validate 99.5%+ win rate before live trading
+    - _Requirements: 12.3_
+
+- [x] 27. Final checkpoint and validation
+  - Run full test suite (unit + property + integration)
+  - Verify test coverage > 85%
+  - Run backtest with historical data
+  - Validate win rate > 99.5%
+  - Deploy to AWS in DRY_RUN mode
+  - Monitor for 24 hours
+  - Review logs and metrics
+  - Get user approval before enabling live trading
+
+- [ ] 28. Documentation and runbook
+  - Create README with setup instructions
+  - Document configuration parameters
+  - Create troubleshooting guide
+  - Document monitoring and alerting
+  - Create incident response runbook
+  - Document manual circuit breaker reset procedure
+
+## Notes
+
+- All tasks are required for comprehensive correctness validation
+- Each task references specific requirements for traceability
+- Checkpoints ensure incremental validation
+- Property tests validate universal correctness properties (minimum 100 iterations each)
+- Unit tests validate specific examples and edge cases
+- Integration tests validate end-to-end flows
+- The system uses Python 3.11+ with Rust core for performance-critical operations
+- All external dependencies (APIs, blockchain) should be mocked in tests
+- DRY_RUN mode must be thoroughly tested before live trading
+- Backtesting must validate 99.5%+ win rate before deployment

@@ -1,0 +1,49 @@
+# Polymarket Arbitrage Bot Configuration
+# Copy this file to config.yaml and fill in your values
+
+# Wallet & Keys
+private_key: "YOUR_PRIVATE_KEY_HERE"
+wallet_address: "YOUR_WALLET_ADDRESS_HERE"
+
+# RPC & APIs
+polygon_rpc_url: "https://polygon-rpc.com"
+backup_rpc_urls:
+  - "https://polygon-mainnet.g.alchemy.com/v2/YOUR_KEY"
+  - "https://rpc-mainnet.matic.network"
+polymarket_api_url: "https://clob.polymarket.com"
+kalshi_api_key: null  # Optional
+nvidia_api_key: null  # Optional
+
+# Contract Addresses (Polygon mainnet defaults)
+usdc_address: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+ctf_exchange_address: "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+conditional_token_address: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
+
+# Trading Parameters
+stake_amount: 10.0
+min_profit_threshold: 0.005  # 0.5%
+max_position_size: 5.0
+min_position_size: 0.1
+
+# Risk Management
+max_pending_tx: 5
+max_gas_price_gwei: 800
+circuit_breaker_threshold: 10
+
+# Fund Management
+min_balance: 50.0
+target_balance: 100.0
+withdraw_limit: 500.0
+
+# Monitoring
+cloudwatch_log_group: "/polymarket-arbitrage-bot"
+sns_alert_topic: ""  # Optional SNS topic ARN
+prometheus_port: 9090
+
+# Operational
+dry_run: false
+scan_interval_seconds: 2
+heartbeat_interval_seconds: 60
+
+# Chain
+chain_id: 137  # Polygon mainnet
