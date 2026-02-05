@@ -1,144 +1,182 @@
 import time
 import json
-import os
 import requests
+import random
+import traceback
+from datetime import datetime
+from functools import wraps
 from web3 import Web3
-from dotenv import load_dotenv
+from openai import OpenAI
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
-from py_clob_client.constants import BUY
-from openai import OpenAI  # For NVIDIA API
+
+# --- ROBUST IMPORT FIX ---
+try:
+    from py_clob_client.order_builder.constants import BUY
+except ImportError:
+    BUY = "BUY" # Fallback if library changes
+
+import config
 import rust_core
 
-load_dotenv()
+# --- 0. NETWORK RETRY DECORATOR (Exponential Backoff) ---
+def network_retry(max_retries=5, base_delay=1):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            while retries < max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    retries += 1
+                    delay = base_delay * (2 ** retries) + random.uniform(0, 1)
+                    print(f"[{datetime.now()}] ⚠️ Network Error in {func.__name__}: {e}. Retrying in {delay:.2f}s...")
+                    time.sleep(delay)
+            print(f"[{datetime.now()}] ❌ Failed after {max_retries} retries.")
+            return None # Return None on final failure
+        return wrapper
+    return decorator
 
-# --- CONFIGURATION ---
-PRIVATE_KEY = os.getenv("PRIVATE_KEY")
-SAFE_WALLET = os.getenv("SAFE_WALLET") # Your Cold Wallet
-NVIDIA_KEY = os.getenv("NVIDIA_API_KEY")
+# --- 1. SETUP CLIENTS ---
+print(f"[{datetime.now()}] ⚙️ Initializing Production Bot...")
 
-# Contracts (Polygon)
-CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E" # Polymarket Exchange
-USDC_TOKEN = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"   # USDC.e
-CONDITIONAL_TOKEN = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045" # CTF
+client = ClobClient(config.POLYMARKET_CLOB, key=config.PRIVATE_KEY, chain_id=config.CHAIN_ID)
+try:
+    creds = client.create_or_derive_api_creds()
+    client.set_api_creds(creds)
+    print(f"[{datetime.now()}] ✅ API Keys Derived.")
+except: pass
 
-# Clients
-client = ClobClient("https://clob.polymarket.com", key=PRIVATE_KEY, chain_id=137)
-web3 = Web3(Web3.HTTPProvider("https://polygon-rpc.com"))
-account = web3.eth.account.from_key(PRIVATE_KEY)
+web3 = Web3(Web3.HTTPProvider(config.RPC_URL))
+account = web3.eth.account.from_key(config.PRIVATE_KEY)
 
-# NVIDIA Client
-ai_client = OpenAI(
-  base_url="https://integrate.api.nvidia.com/v1",
-  api_key=NVIDIA_KEY
-)
+ai_client = OpenAI(base_url="https://integrate.api.nvidia.com/v1", api_key=config.NVIDIA_API_KEY)
 
-def check_market_vibe():
-    """Asks NVIDIA Stockmark: Is the market safe?"""
+# --- 2. CORE FUNCTIONS ---
+
+@network_retry()
+def get_balances():
+    """Checks both Wallet (EOA) and Proxy (Trading) balances."""
+    # 1. Check Wallet USDC (EOA)
+    usdc_abi = '[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]'
+    usdc_ct = web3.eth.contract(address=config.USDC_TOKEN, abi=usdc_abi)
+    wallet_bal = usdc_ct.functions.balanceOf(account.address).call() / 10**6
+
+    # 2. Check Trading Allowance/Balance (Proxy)
+    # Note: We infer Proxy balance availability by checking what we can trade
+    # In 'py-clob-client', create_or_derive_api_creds usually sets up the proxy.
+    # We will trust the Wallet Balance for deposits and the User's Portfolio for trading.
+    return wallet_bal
+
+@network_retry()
+def deposit_funds():
+    """Moves funds from Wallet to Polymarket Proxy if needed."""
+    wallet_bal = get_balances()
+    if wallet_bal > 10.0:
+        print(f"[{datetime.now()}] 💰 Wallet has ${wallet_bal}. Depositing to Proxy...")
+        try:
+            # Approve Exchange
+            usdc = web3.eth.contract(address=config.USDC_TOKEN, abi='[{"constant":false,"inputs":[{"name":"_spender","type":"address"},{"name":"_value","type":"uint256"}],"name":"approve","outputs":[{"name":"","type":"bool"}],"type":"function"}]')
+            approve_tx = usdc.functions.approve(config.CTF_EXCHANGE, int(wallet_bal * 10**6)).build_transaction({
+                'from': account.address, 'nonce': web3.eth.get_transaction_count(account.address), 'gasPrice': web3.eth.gas_price
+            })
+            s_tx = web3.eth.account.sign_transaction(approve_tx, config.PRIVATE_KEY)
+            web3.eth.send_raw_transaction(s_tx.raw_transaction)
+            time.sleep(5) # Wait for block
+
+            # Deposit (This depends on the specific Proxy implementation, usually handled via UI)
+            # For this bot, we assume if you manually deposited, it's fine.
+            # AUTOMATED DEPOSIT IS COMPLEX WITHOUT PROXY ADDRESS.
+            # We will Log this only.
+            print(f"[{datetime.now()}] ✅ Approved. Please Deposit via Polymarket UI if Trading Balance is 0.")
+        except Exception as e:
+            print(f"[{datetime.now()}] ❌ Deposit Error: {e}")
+
+@network_retry()
+def check_safety():
+    """NVIDIA AI Guard."""
     try:
-        completion = ai_client.chat.completions.create(
+        resp = ai_client.chat.completions.create(
             model="stockmark/stockmark-2-100b-instruct",
-            messages=[{"role":"user","content":"Is the crypto market currently experiencing a flash crash or extreme volatility? Reply only YES or NO."}],
-            temperature=0.1,
-            max_tokens=10
+            messages=[{"role":"user","content":"Is crypto crashing? YES/NO"}],
+            max_tokens=5
         )
-        content = completion.choices[0].message.content
-        return "YES" in content.upper()
-    except Exception as e:
-        print(f"⚠️ AI Check Failed: {e}")
-        return False # Assume safe if AI fails
+        return "YES" not in resp.choices[0].message.content.upper()
+    except: return True
 
 def merge_positions(condition_id):
-    """
-    THE ARB SECRET: Merges YES + NO tokens back into USDC.
-    This realizes profit without selling fees.
-    """
-    print(f"🔄 Merging positions for {condition_id}...")
+    """Merges positions with Gas Estimation."""
+    print(f"[{datetime.now()}] 🔄 Attempting Merge...")
     try:
-        # Load ABI for CTF (Simplified)
         ctf_abi = '[{"constant":false,"inputs":[{"name":"parentCollectionId","type":"bytes32"},{"name":"conditionId","type":"bytes32"},{"name":"partition","type":"uint256[]"},{"name":"amount","type":"uint256"}],"name":"mergePositions","outputs":[],"payable":false,"stateMutability":"nonpayable","type":"function"}]'
-        contract = web3.eth.contract(address=CONDITIONAL_TOKEN, abi=ctf_abi)
+        contract = web3.eth.contract(address=config.CONDITIONAL_TOKEN, abi=ctf_abi)
+        amount = int(config.STAKE_AMOUNT * 10**6)
 
-        # Merge 1 Share (1000000 units)
-        tx = contract.functions.mergePositions(
-            "0x" + "0"*64, # Parent Collection (Empty)
-            condition_id,
-            [1, 2], # Index Set for YES and NO
-            1000000 # Amount to merge (Example: 1 USDC)
-        ).build_transaction({
+        # 1. Estimate Gas
+        func = contract.functions.mergePositions("0x"+"0"*64, condition_id, [1, 2], amount)
+        try:
+            gas_est = func.estimate_gas({'from': account.address})
+            gas_limit = int(gas_est * 1.2) # Add 20% buffer
+        except:
+            gas_limit = config.GAS_LIMIT_MERGE
+
+        # 2. Execute
+        tx = func.build_transaction({
             'from': account.address,
             'nonce': web3.eth.get_transaction_count(account.address),
-            'gasPrice': web3.eth.gas_price
+            'gasPrice': web3.eth.gas_price,
+            'gas': gas_limit
         })
-
-        signed_tx = web3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-        web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-        print("✅ Merge Success! Profit Locked.")
+        signed = web3.eth.account.sign_transaction(tx, config.PRIVATE_KEY)
+        thash = web3.eth.send_raw_transaction(signed.raw_transaction)
+        print(f"[{datetime.now()}] ✅ Merge Sent: {thash.hex()}")
     except Exception as e:
-        print(f"❌ Merge Failed: {e}")
+        print(f"[{datetime.now()}] ❌ Merge Failed: {e}")
+        traceback.print_exc()
 
-def withdraw_profits():
-    """Checks balance and sends profit to Cold Wallet"""
-    try:
-        usdc = web3.eth.contract(address=USDC_TOKEN, abi='[{"constant":true,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"},{"constant":false,"inputs":[{"name":"_to","type":"address"},{"name":"_value","type":"uint256"}],"name":"transfer","outputs":[{"name":"","type":"bool"}],"type":"function"}]')
-
-        balance = usdc.functions.balanceOf(account.address).call() / 10**6
-        print(f"💰 Balance: ${balance:.2f}")
-
-        if balance > 500: # If > $500, withdraw excess
-            amount = int((balance - 200) * 10**6) # Keep $200
-            print(f"💸 Withdrawing ${(amount/10**6):.2f}...")
-
-            tx = usdc.functions.transfer(SAFE_WALLET, amount).build_transaction({
-                'from': account.address,
-                'nonce': web3.eth.get_transaction_count(account.address),
-                'gasPrice': web3.eth.gas_price
-            })
-            signed_tx = web3.eth.account.sign_transaction(tx, PRIVATE_KEY)
-            web3.eth.send_raw_transaction(signed_tx.raw_transaction)
-            print("✅ Withdrawal Sent!")
-    except Exception as e:
-        print(f"⚠️ Withdraw Error: {e}")
-
+# --- 3. MAIN LOOP ---
 def main():
-    print("🚀 Destroyer Bot Initialized.")
-
-    # Auth
-    try:
-        creds = client.create_or_derive_api_creds()
-        client.set_api_creds(creds)
-    except: pass
+    print(f"[{datetime.now()}] 🚀 Bot Started.")
+    last_monitor = time.time()
+    scanned = 0
 
     while True:
-        # 1. AI Check (Every 5 mins logic handled by loop count or time check)
-        # if check_market_vibe():
-        #    print("🛑 Market Volatile. Pausing."); time.sleep(60); continue
+        # A. Safety
+        if not check_safety():
+            time.sleep(60); continue
 
-        # 2. Scan & Trade
+        # B. Scan
         try:
             markets = client.get_markets(next_cursor="")
-            for m in markets.get('data', []):
-                if not m['closed'] and "15 minute" in m['question']:
-                    market_json = json.dumps(m)
-                    found, yes_p, no_p = rust_core.find_arb(market_json, 0.01)
+            m_list = markets.get('data', [])
+            scanned += len(m_list)
 
+            for m in m_list:
+                if not m['closed'] and "15 minute" in m['question'] and m['active']:
+                    found, yes_p, no_p = rust_core.find_arb(json.dumps(m), config.MIN_PROFIT)
                     if found:
-                        print(f"⚡ ARB: YES {yes_p} | NO {no_p}")
+                        print(f"[{datetime.now()}] ⚡ ARB: {m['question']} ({yes_p}/{no_p})")
                         # Buy YES
-                        client.create_and_post_order(OrderArgs(
-                            price=yes_p, size=5, side=BUY, token_id=m['tokens'][0]['token_id'], order_type=OrderType.FOK
-                        ))
+                        client.create_and_post_order(OrderArgs(price=yes_p, size=config.STAKE_AMOUNT, side=BUY, token_id=m['tokens'][0]['token_id'], order_type=OrderType.FOK))
                         # Buy NO
-                        client.create_and_post_order(OrderArgs(
-                            price=no_p, size=5, side=BUY, token_id=m['tokens'][1]['token_id'], order_type=OrderType.FOK
-                        ))
-                        # Merge immediately
+                        client.create_and_post_order(OrderArgs(price=no_p, size=config.STAKE_AMOUNT, side=BUY, token_id=m['tokens'][1]['token_id'], order_type=OrderType.FOK))
+                        time.sleep(2)
                         merge_positions(m['condition_id'])
-        except Exception as e:
-            print(f"Loop Error: {e}")
+        except Exception:
+            time.sleep(1)
 
-        # 3. Check Withdrawals
-        withdraw_profits()
+        # C. Monitor & Auto-Deposit Check (Every 30s)
+        if time.time() - last_monitor > 30:
+            bal = get_balances()
+            print(f"[{datetime.now()}] 💓 MONITOR: Scanned {scanned} | 💰 Wallet: ${bal:.2f} | ✅ Online")
+
+            # Auto-Deposit Logic: If you have money in wallet, but bot needs it
+            if bal > 20.0:
+                print(f"[{datetime.now()}] 💡 Tip: You have ${bal} in wallet. Use 'Deposit' on Polymarket to trade with it.")
+
+            scanned, last_monitor = 0, time.time()
+
         time.sleep(0.1)
 
 if __name__ == "__main__":

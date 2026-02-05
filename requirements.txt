@@ -3,6 +3,5 @@ web3
 requests
 python-dotenv
 colorama
-anthropic
 openai
 maturin
