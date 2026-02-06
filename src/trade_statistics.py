@@ -441,3 +441,38 @@ class TradeStatisticsTracker:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
         return self.get_statistics(start_date, end_date)
+    
+    def get_recent_win_rate(self, last_n: int = 10) -> Optional[float]:
+        """
+        Get win rate from the last N trades.
+        
+        Used for dynamic position sizing to reduce risk after losses.
+        
+        Args:
+            last_n: Number of recent trades to consider (default: 10)
+            
+        Returns:
+            Win rate as float (0.0 to 1.0), or None if insufficient trades
+        """
+        try:
+            # Get last N trades
+            recent_trades = self.db.get_recent_trades(limit=last_n)
+            
+            if not recent_trades or len(recent_trades) < 3:
+                # Need at least 3 trades for meaningful win rate
+                return None
+            
+            # Calculate win rate
+            successful = sum(1 for t in recent_trades if t['status'] == 'success')
+            win_rate = successful / len(recent_trades)
+            
+            self.logger.debug(
+                f"Recent win rate: {win_rate:.2%} "
+                f"({successful}/{len(recent_trades)} trades)"
+            )
+            
+            return win_rate
+            
+        except Exception as e:
+            self.logger.error(f"Failed to calculate recent win rate: {e}")
+            return None

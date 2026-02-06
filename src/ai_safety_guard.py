@@ -61,7 +61,7 @@ class AISafetyGuard:
     def __init__(
         self,
         nvidia_api_key: str,
-        nvidia_api_url: str = "https://api.nvidia.com/v1/chat/completions",
+        nvidia_api_url: str = "https://integrate.api.nvidia.com/v1",
         min_balance: Decimal = Decimal('10.0'),
         max_gas_price_gwei: int = 800,
         max_pending_tx: int = 5,
@@ -215,6 +215,8 @@ class AISafetyGuard:
         """
         Query NVIDIA AI API for safety validation with 2-second timeout.
         
+        Uses DeepSeek v3.2 model via NVIDIA API for intelligent trade validation.
+        
         Implements Requirements 7.1, 7.2, 7.3:
         - Queries NVIDIA API with market context
         - Parses multilingual YES/NO responses
@@ -232,57 +234,50 @@ class AISafetyGuard:
         
         try:
             # Query NVIDIA API with 2-second timeout (Requirement 7.3)
-            async with aiohttp.ClientSession() as session:
-                headers = {
-                    "Authorization": f"Bearer {self.nvidia_api_key}",
-                    "Content-Type": "application/json"
-                }
-                
-                payload = {
-                    "model": "nvidia/llama-3.1-nemotron-70b-instruct",
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are a safety validator for cryptocurrency arbitrage trading. "
-                                "Analyze the market and respond with YES if the trade is safe, "
-                                "or NO if there are concerns. Consider: market clarity, price reasonableness, "
-                                "volatility, and potential manipulation. Respond with only YES or NO."
-                            )
-                        },
-                        {
-                            "role": "user",
-                            "content": context
-                        }
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 10
-                }
-                
-                async with session.post(
-                    self.nvidia_api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=2.0)
-                ) as response:
-                    if response.status != 200:
-                        logger.warning(f"NVIDIA API returned status {response.status}")
-                        return None
-                    
-                    data = await response.json()
-                    ai_response = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                    
-                    # Parse multilingual YES/NO response (Requirement 7.2)
-                    result = self.parse_yes_no_response(ai_response)
-                    
-                    logger.debug(f"NVIDIA API response: '{ai_response}' -> {result}")
-                    return result
+            # Using OpenAI-compatible client as specified by user
+            from openai import OpenAI
+            
+            client = OpenAI(
+                base_url="https://integrate.api.nvidia.com/v1",
+                api_key=self.nvidia_api_key
+            )
+            
+            # Create completion with DeepSeek v3.2 model
+            completion = client.chat.completions.create(
+                model="deepseek-ai/deepseek-v3.2",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a safety validator for cryptocurrency arbitrage trading. "
+                            "Analyze the market and respond with YES if the trade is safe, "
+                            "or NO if there are concerns. Consider: market clarity, price reasonableness, "
+                            "volatility, and potential manipulation. Respond with only YES or NO."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": context
+                    }
+                ],
+                temperature=1,
+                top_p=0.95,
+                max_tokens=8192,
+                extra_body={"chat_template_kwargs": {"thinking": True}},
+                timeout=2.0  # 2-second timeout
+            )
+            
+            # Extract response
+            ai_response = completion.choices[0].message.content if completion.choices else ""
+            
+            # Parse multilingual YES/NO response (Requirement 7.2)
+            result = self.parse_yes_no_response(ai_response)
+            
+            logger.debug(f"NVIDIA API response: '{ai_response}' -> {result}")
+            return result
         
-        except asyncio.TimeoutError:
-            logger.warning("NVIDIA API timeout (2 seconds)")
-            return None
         except Exception as e:
-            logger.error(f"NVIDIA API error: {e}")
+            logger.warning(f"NVIDIA API error: {e}")
             return None
     
     def parse_yes_no_response(self, response: str) -> Optional[bool]:

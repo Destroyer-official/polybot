@@ -33,8 +33,9 @@ from src.monitoring_system import MonitoringSystem
 from src.status_dashboard import StatusDashboard
 from src.market_parser import MarketParser
 from src.trade_history import TradeHistoryDB
-from src.trade_statistics import TradeStatistics
+from src.trade_statistics import TradeStatisticsTracker
 from src.error_recovery import CircuitBreaker
+from src.auto_bridge_manager import AutoBridgeManager
 
 logger = logging.getLogger(__name__)
 
@@ -86,14 +87,31 @@ class MainOrchestrator:
                 f"Expected: {config.wallet_address}, Got: {self.account.address}"
             )
         
-        logger.info(f"✓ Wallet address verified: {self.account.address}")
+        logger.info(f"[OK] Wallet address verified: {self.account.address}")
         
-        # Initialize CLOB client
+        # Detect wallet type and configuration
+        logger.info("Detecting wallet type...")
+        from src.wallet_type_detector import WalletTypeDetector
+        
+        wallet_detector = WalletTypeDetector(self.web3, config.private_key)
+        wallet_config = wallet_detector.auto_detect_configuration()
+        
+        self.signature_type = wallet_config['signature_type']
+        self.funder_address = wallet_config['funder_address']
+        self.wallet_type = wallet_config['wallet_type']
+        
+        logger.info(f"Wallet type: {self.wallet_type}")
+        logger.info(f"Signature type: {self.signature_type}")
+        logger.info(f"Funder address: {self.funder_address}")
+        
+        # Initialize CLOB client with correct signature type
         logger.info("Initializing Polymarket CLOB client...")
         self.clob_client = ClobClient(
             host=config.polymarket_api_url,
             key=config.private_key,
-            chain_id=config.chain_id
+            chain_id=config.chain_id,
+            signature_type=self.signature_type,
+            funder=self.funder_address
         )
         
         # Derive API credentials
@@ -104,13 +122,37 @@ class MainOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to derive API credentials: {e}")
         
+        # Check and set token allowances (EOA wallets only)
+        if self.signature_type == 0:
+            logger.info("Checking token allowances (EOA wallet)...")
+            from src.token_allowance_manager import TokenAllowanceManager
+            
+            self.allowance_manager = TokenAllowanceManager(self.web3, self.account)
+            allowance_results = self.allowance_manager.check_all_allowances()
+            
+            if not allowance_results['all_approved']:
+                logger.warning("⚠️  Token allowances not set!")
+                logger.warning("Run 'python setup_bot.py' to set allowances before trading")
+                if not config.dry_run:
+                    raise RuntimeError(
+                        "Token allowances must be set before trading. "
+                        "Run 'python setup_bot.py' to configure allowances."
+                    )
+            else:
+                logger.info("✅ All token allowances verified")
+        else:
+            logger.info("Skipping token allowances (proxy/safe wallet manages automatically)")
+            self.allowance_manager = None
+        
         # Initialize core components
         logger.info("Initializing core components...")
         
         self.transaction_manager = TransactionManager(self.web3, self.account)
         self.position_merger = PositionMerger(
             self.web3,
-            config.conditional_token_address
+            config.conditional_token_address,
+            config.usdc_address,
+            self.account
         )
         self.order_manager = OrderManager(
             self.clob_client,
@@ -120,80 +162,101 @@ class MainOrchestrator:
         # Initialize safety and risk management
         self.ai_safety_guard = AISafetyGuard(
             nvidia_api_key=config.nvidia_api_key,
-            max_volatility=Decimal("0.05"),  # 5%
-            timeout_seconds=2.0
+            min_balance=config.min_balance,
+            max_gas_price_gwei=config.max_gas_price_gwei,
+            max_pending_tx=config.max_pending_tx,
+            volatility_threshold=Decimal("0.05"),  # 5%
+            volatility_halt_duration=300  # 5 minutes
         )
         
         self.circuit_breaker = CircuitBreaker(
-            threshold=config.circuit_breaker_threshold
+            failure_threshold=config.circuit_breaker_threshold
         )
         
         # Initialize fund manager
         self.fund_manager = FundManager(
             web3=self.web3,
-            clob_client=self.clob_client,
-            account=self.account,
+            wallet=self.account,
             usdc_address=config.usdc_address,
             ctf_exchange_address=config.ctf_exchange_address,
             min_balance=config.min_balance,
             target_balance=config.target_balance,
-            withdraw_limit=config.withdraw_limit
+            withdraw_limit=config.withdraw_limit,
+            dry_run=config.dry_run,
+            oneinch_api_key=None  # Optional, not in config yet
+        )
+        
+        # Initialize auto-bridge manager for fully autonomous operation
+        self.auto_bridge_manager = AutoBridgeManager(
+            private_key=config.private_key,
+            polygon_rpc=config.polygon_rpc_url,
+            dry_run=config.dry_run
         )
         
         # Initialize strategy engines
         logger.info("Initializing strategy engines...")
+        
+        # Initialize Kelly position sizer
+        from src.kelly_position_sizer import KellyPositionSizer
+        from src.dynamic_position_sizer import DynamicPositionSizer
+        
+        self.kelly_sizer = KellyPositionSizer()  # Uses default config
+        self.dynamic_sizer = DynamicPositionSizer()  # Dynamic position sizing
         
         self.internal_arbitrage = InternalArbitrageEngine(
             clob_client=self.clob_client,
             order_manager=self.order_manager,
             position_merger=self.position_merger,
             ai_safety_guard=self.ai_safety_guard,
+            kelly_sizer=self.kelly_sizer,
+            dynamic_sizer=self.dynamic_sizer,  # Pass dynamic sizer
             min_profit_threshold=config.min_profit_threshold
         )
         
         # Cross-platform arbitrage (if Kalshi API key provided)
+        # TEMPORARILY DISABLED - needs additional setup
         self.cross_platform_arbitrage = None
-        if config.kalshi_api_key:
-            self.cross_platform_arbitrage = CrossPlatformArbitrageEngine(
-                polymarket_client=self.clob_client,
-                kalshi_api_key=config.kalshi_api_key,
-                order_manager=self.order_manager,
-                ai_safety_guard=self.ai_safety_guard
-            )
-            logger.info("Cross-platform arbitrage enabled")
+        # if config.kalshi_api_key:
+        #     self.cross_platform_arbitrage = CrossPlatformArbitrageEngine(
+        #         polymarket_client=self.clob_client,
+        #         kalshi_api_key=config.kalshi_api_key,
+        #         order_manager=self.order_manager,
+        #         ai_safety_guard=self.ai_safety_guard
+        #     )
+        #     logger.info("Cross-platform arbitrage enabled")
         
         # Latency arbitrage
-        self.latency_arbitrage = LatencyArbitrageEngine(
-            clob_client=self.clob_client,
-            order_manager=self.order_manager,
-            ai_safety_guard=self.ai_safety_guard
-        )
+        # TEMPORARILY DISABLED - needs CEX feeds setup
+        self.latency_arbitrage = None
+        # self.latency_arbitrage = LatencyArbitrageEngine(
+        #     clob_client=self.clob_client,
+        #     order_manager=self.order_manager,
+        #     ai_safety_guard=self.ai_safety_guard
+        # )
         
         # Resolution farming
-        self.resolution_farming = ResolutionFarmingEngine(
-            clob_client=self.clob_client,
-            order_manager=self.order_manager,
-            ai_safety_guard=self.ai_safety_guard,
-            max_position_pct=Decimal("0.02")  # 2% of bankroll
-        )
+        # TEMPORARILY DISABLED - needs additional setup
+        self.resolution_farming = None
+        # self.resolution_farming = ResolutionFarmingEngine(
+        #     clob_client=self.clob_client,
+        #     order_manager=self.order_manager,
+        #     ai_safety_guard=self.ai_safety_guard,
+        #     max_position_pct=Decimal("0.02")  # 2% of bankroll
+        # )
         
         # Initialize monitoring and reporting
         logger.info("Initializing monitoring system...")
         
         self.monitoring = MonitoringSystem(
             prometheus_port=config.prometheus_port,
-            cloudwatch_log_group=config.cloudwatch_log_group,
             sns_topic_arn=config.sns_alert_topic
         )
         
         self.trade_history = TradeHistoryDB()
-        self.trade_statistics = TradeStatistics()
+        self.trade_statistics = TradeStatisticsTracker(self.trade_history)
         
         # Initialize status dashboard
-        self.dashboard = StatusDashboard(
-            monitoring=self.monitoring,
-            trade_statistics=self.trade_statistics
-        )
+        self.dashboard = StatusDashboard()
         
         # Initialize market parser
         self.market_parser = MarketParser()
@@ -357,7 +420,15 @@ class MainOrchestrator:
             issues.append(f"RPC connectivity failed: {e}")
         
         # Get performance metrics
-        stats = self.trade_statistics.get_summary()
+        stats_obj = self.trade_statistics.get_statistics()
+        stats = {
+            'total_trades': stats_obj.total_trades,
+            'win_rate': float(stats_obj.win_rate),
+            'total_profit': stats_obj.total_profit,
+            'avg_profit_per_trade': stats_obj.avg_profit_per_trade,
+            'total_gas_cost': stats_obj.total_gas_cost,
+            'net_profit': stats_obj.net_profit
+        }
         
         # Check circuit breaker
         circuit_breaker_open = self.circuit_breaker.is_open
@@ -399,11 +470,12 @@ class MainOrchestrator:
             issues=issues
         )
         
-        # Log heartbeat
-        self.monitoring.log_heartbeat(health_status)
+        # Log heartbeat - monitoring system doesn't have this method
+        # Just log it normally
+        logger.info(f"Heartbeat: Balance=${total_balance:.2f}, Gas={gas_price_gwei}gwei, Healthy={is_healthy}")
         
-        # Update dashboard
-        self.dashboard.update_health_status(health_status)
+        # Dashboard update not needed - passive display
+        # self.dashboard.update_health_status(health_status)
         
         return health_status
     
@@ -426,10 +498,11 @@ class MainOrchestrator:
                         f"Gas price too high: {gas_price_gwei} gwei "
                         f"(max: {self.config.max_gas_price_gwei}). Halting trading."
                     )
-                    self.monitoring.send_alert(
-                        "warning",
-                        f"Trading halted: Gas price {gas_price_gwei} gwei exceeds limit"
-                    )
+                    # Monitoring system doesn't have send_alert
+                    # self.monitoring.send_alert(
+                    #     "warning",
+                    #     f"Trading halted: Gas price {gas_price_gwei} gwei exceeds limit"
+                    # )
                     self.gas_price_halted = True
                 return False
             else:
@@ -437,10 +510,11 @@ class MainOrchestrator:
                     logger.info(
                         f"Gas price normalized: {gas_price_gwei} gwei. Resuming trading."
                     )
-                    self.monitoring.send_alert(
-                        "info",
-                        f"Trading resumed: Gas price {gas_price_gwei} gwei"
-                    )
+                    # Monitoring system doesn't have send_alert
+                    # self.monitoring.send_alert(
+                    #     "info",
+                    #     f"Trading resumed: Gas price {gas_price_gwei} gwei"
+                    # )
                     self.gas_price_halted = False
                 return True
                 
@@ -453,30 +527,128 @@ class MainOrchestrator:
         Scan markets for opportunities and execute trades.
         
         Main trading logic that:
-        1. Fetches markets from CLOB API
-        2. Parses and filters to 15-min crypto markets
+        1. Fetches markets from Gamma API (active markets only)
+        2. Parses and filters markets
         3. Scans for opportunities across all strategies
         4. Validates safety checks
         5. Executes profitable trades
         """
         try:
-            # Fetch markets
-            logger.debug("Fetching markets from CLOB API...")
-            markets_response = self.clob_client.get_markets()
-            raw_markets = markets_response.get('data', [])
+            # Fetch markets from Gamma API (active markets only)
+            logger.debug("Fetching active markets from Gamma API...")
             
-            # Parse and filter markets
+            import requests
+            import json
+            gamma_url = "https://gamma-api.polymarket.com/markets"
+            params = {
+                'closed': 'false',  # Only active markets
+                'limit': 100,
+                'offset': 0
+            }
+            
+            try:
+                response = requests.get(gamma_url, params=params, timeout=10)
+                response.raise_for_status()
+                gamma_markets = response.json()
+                
+                if not isinstance(gamma_markets, list):
+                    gamma_markets = gamma_markets.get('data', [])
+                
+                logger.info(f"Fetched {len(gamma_markets)} active markets from Gamma API")
+                
+                # Convert Gamma API format to CLOB API format
+                raw_markets = []
+                for gm in gamma_markets:
+                    # Skip if no conditionId
+                    condition_id = gm.get('conditionId', '')
+                    if not condition_id:
+                        logger.debug(f"Skipping market without conditionId")
+                        continue
+                    
+                    # Parse outcomes and prices (Gamma returns JSON strings)
+                    try:
+                        outcomes_raw = gm.get('outcomes', '[]')
+                        prices_raw = gm.get('outcomePrices', '[]')
+                        token_ids_raw = gm.get('clobTokenIds', '[]')
+                        
+                        # Parse JSON strings
+                        outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+                        prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+                        token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
+                        
+                        # Ensure we have lists
+                        if not isinstance(outcomes, list):
+                            outcomes = []
+                        if not isinstance(prices, list):
+                            prices = []
+                        if not isinstance(token_ids, list):
+                            token_ids = []
+                        
+                    except Exception as e:
+                        logger.debug(f"Failed to parse market {condition_id} data: {e}")
+                        outcomes = []
+                        prices = []
+                        token_ids = []
+                    
+                    # Skip if no outcomes
+                    if len(outcomes) < 2:
+                        logger.debug(f"Skipping market {condition_id} - insufficient outcomes")
+                        continue
+                    
+                    # Build tokens array
+                    tokens = []
+                    for i, outcome in enumerate(outcomes):
+                        token_data = {
+                            'outcome': outcome,
+                            'price': float(prices[i]) if i < len(prices) else 0.0,
+                            'token_id': str(token_ids[i]) if i < len(token_ids) else ''
+                        }
+                        tokens.append(token_data)
+                    
+                    # Convert to CLOB format with all required fields
+                    clob_market = {
+                        'condition_id': condition_id,
+                        'question': gm.get('question', ''),
+                        'end_date_iso': gm.get('endDate', ''),
+                        'closed': gm.get('closed', False),
+                        'accepting_orders': gm.get('acceptingOrders', True),  # Default to True
+                        'tokens': tokens,
+                        'volume': float(gm.get('volume', 0)),
+                        'liquidity': float(gm.get('liquidity', 0)),
+                        'resolution_source': gm.get('resolutionSource', '')
+                    }
+                    raw_markets.append(clob_market)
+                
+                logger.info(f"Converted {len(raw_markets)} markets from Gamma API format")
+                
+            except Exception as e:
+                logger.error(f"Failed to fetch from Gamma API: {e}")
+                # Fallback to CLOB API
+                logger.info("Falling back to CLOB API...")
+                markets_response = self.clob_client.get_markets()
+                raw_markets = markets_response.get('data', []) if isinstance(markets_response, dict) else markets_response
+            
+            # Parse markets - NO FILTERING for maximum opportunity coverage
             markets = []
             for raw_market in raw_markets:
-                market = self.market_parser.parse_market(raw_market)
-                if market and market.is_crypto_15min():
+                market = self.market_parser.parse_single_market(raw_market)
+                if market:
                     markets.append(market)
             
-            logger.debug(f"Found {len(markets)} active 15-min crypto markets")
-            self.monitoring.record_markets_scanned(len(markets))
+            logger.info(f"Parsed {len(markets)} tradeable markets")
             
-            # Update dashboard
-            self.dashboard.update_scan_info(len(raw_markets), len(markets))
+            if len(markets) == 0:
+                logger.warning("No tradeable markets found - all markets filtered out")
+                logger.warning("This could mean:")
+                logger.warning("  1. All markets are closed/expired")
+                logger.warning("  2. API is returning stale data")
+                logger.warning("  3. Polymarket has very few active markets right now")
+                return
+            # Monitoring system doesn't have record_markets_scanned
+            # self.monitoring.record_markets_scanned(len(markets))
+            
+            # Dashboard update not needed - passive display
+            # self.dashboard.update_scan_info(len(raw_markets), len(markets))
             
             # Scan for opportunities across all strategies
             opportunities = []
@@ -490,19 +662,22 @@ class MainOrchestrator:
                 cross_opps = await self.cross_platform_arbitrage.scan_opportunities()
                 opportunities.extend(cross_opps)
             
-            # Latency arbitrage
-            latency_opps = await self.latency_arbitrage.scan_opportunities(markets)
-            opportunities.extend(latency_opps)
+            # Latency arbitrage (if enabled)
+            if self.latency_arbitrage:
+                latency_opps = await self.latency_arbitrage.scan_opportunities(markets)
+                opportunities.extend(latency_opps)
             
-            # Resolution farming
-            resolution_opps = await self.resolution_farming.scan_closing_markets(markets)
-            opportunities.extend(resolution_opps)
+            # Resolution farming (if enabled)
+            if self.resolution_farming:
+                resolution_opps = await self.resolution_farming.scan_closing_markets(markets)
+                opportunities.extend(resolution_opps)
             
             logger.debug(f"Found {len(opportunities)} total opportunities")
-            self.monitoring.record_opportunities_found(len(opportunities))
+            # Monitoring system doesn't have record_opportunities_found
+            # self.monitoring.record_opportunities_found(len(opportunities))
             
-            # Update dashboard with opportunities
-            self.dashboard.update_opportunities(opportunities)
+            # Dashboard update not needed - passive display
+            # self.dashboard.update_opportunities(opportunities)
             
             # Execute opportunities
             for opp in opportunities:
@@ -515,10 +690,37 @@ class MainOrchestrator:
                     logger.warning("Circuit breaker is open, skipping trade")
                     break
                 
+                # Get current balances for dynamic position sizing
+                try:
+                    eoa_balance, proxy_balance = await self.fund_manager.check_balance()
+                    recent_win_rate = self.trade_statistics.get_recent_win_rate(last_n=10)
+                except Exception as e:
+                    logger.error(f"Failed to get balances: {e}")
+                    eoa_balance = proxy_balance = Decimal('0')
+                    recent_win_rate = None
+                
+                # Find the market for this opportunity
+                market_for_opp = None
+                for m in markets:
+                    if m.market_id == opp.market_id:
+                        market_for_opp = m
+                        break
+                
+                if market_for_opp is None:
+                    logger.warning(f"Market not found for opportunity {opp.opportunity_id}")
+                    continue
+                
                 # Execute based on strategy
                 try:
-                    if opp.strategy == "internal":
-                        result = await self.internal_arbitrage.execute(opp)
+                    if opp.strategy == "internal_arbitrage":
+                        result = await self.internal_arbitrage.execute(
+                            opp,
+                            market=market_for_opp,
+                            bankroll=eoa_balance + proxy_balance,
+                            private_wallet_balance=eoa_balance,
+                            polymarket_balance=proxy_balance,
+                            recent_win_rate=recent_win_rate
+                        )
                     elif opp.strategy == "cross_platform":
                         result = await self.cross_platform_arbitrage.execute(opp)
                     elif opp.strategy == "latency":
@@ -534,7 +736,7 @@ class MainOrchestrator:
                     self.trade_statistics.update(result)
                     self.monitoring.record_trade(result)
                     
-                    # Update dashboard
+                    # Dashboard update - add_trade exists
                     self.dashboard.add_trade(result)
                     
                     # Update circuit breaker
@@ -581,8 +783,50 @@ class MainOrchestrator:
         logger.info(f"Min profit threshold: {self.config.min_profit_threshold * 100}%")
         logger.info("=" * 80)
         
-        # Start dashboard
-        self.dashboard.start()
+        # AUTONOMOUS OPERATION: Check for funds (skip slow bridge)
+        logger.info("\n[AUTO] AUTONOMOUS MODE: Checking for funds...")
+        try:
+            # Check Polymarket balance directly - skip bridge entirely
+            eoa_balance, proxy_balance = await self.fund_manager.check_balance()
+            total_balance = eoa_balance + proxy_balance
+            
+            logger.info(f"Private Wallet (Polygon): ${eoa_balance:.2f} USDC")
+            logger.info(f"Polymarket Balance: ${proxy_balance:.2f} USDC")
+            logger.info(f"Total Available: ${total_balance:.2f} USDC")
+            
+            if total_balance < Decimal("0.50"):
+                logger.error("=" * 80)
+                logger.error("INSUFFICIENT FUNDS - CANNOT START TRADING")
+                logger.error("=" * 80)
+                logger.error(f"Total balance: ${total_balance:.2f} USDC")
+                logger.error("Minimum required: $0.50 USDC")
+                logger.error("")
+                logger.error("FASTEST WAY TO START TRADING:")
+                logger.error("")
+                logger.error("1. Go to: https://polymarket.com")
+                logger.error("2. Click 'Connect Wallet' (top right)")
+                logger.error("3. Click your profile → 'Deposit'")
+                logger.error("4. Enter amount (e.g., $3.59)")
+                logger.error("5. Select 'Wallet' as source")
+                logger.error("6. Select 'Ethereum' as network")
+                logger.error("7. Click 'Continue' → Approve in MetaMask")
+                logger.error("8. Wait 10-30 seconds → Done!")
+                logger.error("")
+                logger.error("Benefits:")
+                logger.error("  - Instant (10-30 seconds vs 5-30 minutes)")
+                logger.error("  - Free (Polymarket pays gas fees)")
+                logger.error("  - Easy (one click)")
+                logger.error("")
+                logger.error(f"Your wallet: {self.account.address}")
+                logger.error("=" * 80)
+                return
+            
+            logger.info("[OK] Sufficient funds - starting autonomous trading!")
+        except Exception as e:
+            logger.error(f"Auto-bridge check failed: {e}")
+            logger.warning("Proceeding anyway - will check balance during operation")
+        
+        # Start dashboard is not needed - dashboard is passive
         
         # Perform initial heartbeat
         await self.heartbeat_check()
@@ -626,8 +870,7 @@ class MainOrchestrator:
                     self._save_state()
                     self.last_state_save = time.time()
                 
-                # Update dashboard
-                self.dashboard.render()
+                # Dashboard is passive - no need to render
                 
                 # Sleep for remaining interval
                 elapsed = time.time() - loop_start
@@ -639,7 +882,8 @@ class MainOrchestrator:
             logger.info("Keyboard interrupt received")
         except Exception as e:
             logger.critical(f"Fatal error in main loop: {e}", exc_info=True)
-            self.monitoring.send_alert("critical", f"Fatal error: {e}")
+            # Monitoring system doesn't have send_alert
+            # self.monitoring.send_alert("critical", f"Fatal error: {e}")
         finally:
             await self.shutdown()
     
@@ -666,8 +910,7 @@ class MainOrchestrator:
         self.running = False
         self.shutdown_requested = True
         
-        # Stop dashboard
-        self.dashboard.stop()
+        # Dashboard is passive - no need to stop
         
         # Wait for pending transactions
         logger.info("Waiting for pending transactions...")
@@ -693,15 +936,15 @@ class MainOrchestrator:
         # Web3 connections are stateless, no need to close
         
         # Final statistics
-        stats = self.trade_statistics.get_summary()
+        stats_obj = self.trade_statistics.get_statistics()
         logger.info("=" * 80)
         logger.info("FINAL STATISTICS")
         logger.info("=" * 80)
-        logger.info(f"Total Trades: {stats['total_trades']}")
-        logger.info(f"Win Rate: {stats['win_rate']:.2f}%")
-        logger.info(f"Total Profit: ${stats['total_profit']:.2f}")
-        logger.info(f"Total Gas Cost: ${stats['total_gas_cost']:.2f}")
-        logger.info(f"Net Profit: ${stats['net_profit']:.2f}")
+        logger.info(f"Total Trades: {stats_obj.total_trades}")
+        logger.info(f"Win Rate: {stats_obj.win_rate:.2f}%")
+        logger.info(f"Total Profit: ${stats_obj.total_profit:.2f}")
+        logger.info(f"Total Gas Cost: ${stats_obj.total_gas_cost:.2f}")
+        logger.info(f"Net Profit: ${stats_obj.net_profit:.2f}")
         logger.info("=" * 80)
         logger.info("SHUTDOWN COMPLETE")
         logger.info("=" * 80)

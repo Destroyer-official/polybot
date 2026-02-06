@@ -16,6 +16,7 @@ import rust_core
 from src.models import Market, Opportunity, TradeResult, SafetyDecision
 from src.ai_safety_guard import AISafetyGuard
 from src.kelly_position_sizer import KellyPositionSizer
+from src.dynamic_position_sizer import DynamicPositionSizer
 from src.order_manager import OrderManager, Order
 from src.position_merger import PositionMerger
 
@@ -47,6 +48,7 @@ class InternalArbitrageEngine:
         position_merger: PositionMerger,
         ai_safety_guard: AISafetyGuard,
         kelly_sizer: KellyPositionSizer,
+        dynamic_sizer: Optional[DynamicPositionSizer] = None,
         min_profit_threshold: Decimal = Decimal('0.005'),  # 0.5%
         current_balance_getter=None,  # Callable to get current balance
         current_gas_price_getter=None,  # Callable to get current gas price
@@ -61,6 +63,7 @@ class InternalArbitrageEngine:
             position_merger: Position merger for redeeming positions
             ai_safety_guard: AI safety guard for validation
             kelly_sizer: Kelly position sizer for optimal sizing
+            dynamic_sizer: Dynamic position sizer (optional, recommended)
             min_profit_threshold: Minimum profit percentage (default 0.5%)
             current_balance_getter: Function to get current balance
             current_gas_price_getter: Function to get current gas price in gwei
@@ -71,6 +74,7 @@ class InternalArbitrageEngine:
         self.position_merger = position_merger
         self.ai_safety_guard = ai_safety_guard
         self.kelly_sizer = kelly_sizer
+        self.dynamic_sizer = dynamic_sizer or DynamicPositionSizer()
         self.min_profit_threshold = min_profit_threshold
         
         # Getters for safety checks
@@ -80,7 +84,8 @@ class InternalArbitrageEngine:
         
         logger.info(
             f"InternalArbitrageEngine initialized: "
-            f"min_profit_threshold={min_profit_threshold * 100}%"
+            f"min_profit_threshold={min_profit_threshold * 100}%, "
+            f"dynamic_sizing={'enabled' if dynamic_sizer else 'default'}"
         )
     
     async def scan_opportunities(self, markets: List[Market]) -> List[Opportunity]:
@@ -214,10 +219,13 @@ class InternalArbitrageEngine:
         self,
         opportunity: Opportunity,
         market: Market,
-        bankroll: Decimal
+        bankroll: Decimal,
+        private_wallet_balance: Optional[Decimal] = None,
+        polymarket_balance: Optional[Decimal] = None,
+        recent_win_rate: Optional[float] = None
     ) -> TradeResult:
         """
-        Execute internal arbitrage trade with AI safety checks and Kelly sizing.
+        Execute internal arbitrage trade with AI safety checks and dynamic sizing.
         
         Validates Requirements:
         - 1.3: Create FOK orders for both YES and NO
@@ -226,11 +234,15 @@ class InternalArbitrageEngine:
         - 1.6: Receive $1.00 USDC per position pair
         - 7.1-7.6: AI safety checks
         - 11.1-11.4: Kelly position sizing
+        - NEW: Dynamic position sizing based on available balance
         
         Args:
             opportunity: The arbitrage opportunity to execute
             market: The market associated with the opportunity
             bankroll: Current bankroll for position sizing
+            private_wallet_balance: Private wallet USDC balance (optional)
+            polymarket_balance: Polymarket USDC balance (optional)
+            recent_win_rate: Recent win rate for dynamic sizing (optional)
             
         Returns:
             TradeResult with execution details
@@ -275,14 +287,50 @@ class InternalArbitrageEngine:
             
             logger.info(f"AI safety check passed: {safety_decision.reason}")
             
-            # Step 2: Calculate Position Size (Requirements 11.1-11.4)
-            logger.debug("Calculating position size using Kelly Criterion...")
-            position_size = self.kelly_sizer.calculate_position_size(
-                opportunity=opportunity,
-                bankroll=bankroll
-            )
+            # Step 2: Calculate Position Size
+            # Use dynamic sizer if balance info provided, otherwise use Kelly
+            if private_wallet_balance is not None and polymarket_balance is not None:
+                logger.debug("Calculating position size using dynamic sizer...")
+                position_size = self.dynamic_sizer.calculate_position_size(
+                    private_wallet_balance=private_wallet_balance,
+                    polymarket_balance=polymarket_balance,
+                    opportunity=opportunity,
+                    market=market,
+                    recent_win_rate=recent_win_rate,
+                    pending_trades_value=Decimal('0')  # TODO: track pending trades
+                )
+                logger.info(
+                    f"Dynamic position size: ${position_size} "
+                    f"(private: ${private_wallet_balance}, polymarket: ${polymarket_balance})"
+                )
+            else:
+                logger.debug("Calculating position size using Kelly Criterion...")
+                position_size = self.kelly_sizer.calculate_position_size(
+                    opportunity=opportunity,
+                    bankroll=bankroll
+                )
+                logger.info(f"Kelly position size: ${position_size} (bankroll: ${bankroll})")
             
-            logger.info(f"Position size: ${position_size} (bankroll: ${bankroll})")
+            # Validate position size
+            if position_size <= 0:
+                logger.warning("Position size is zero or negative, skipping trade")
+                return TradeResult(
+                    trade_id=trade_id,
+                    opportunity=opportunity,
+                    timestamp=timestamp,
+                    status="failed",
+                    yes_order_id=None,
+                    no_order_id=None,
+                    yes_filled=False,
+                    no_filled=False,
+                    yes_fill_price=None,
+                    no_fill_price=None,
+                    actual_cost=Decimal('0'),
+                    actual_profit=Decimal('0'),
+                    gas_cost=Decimal('0'),
+                    net_profit=Decimal('0'),
+                    error_message="Position size is zero or negative"
+                )
             
             # Update opportunity with position size
             opportunity.position_size = position_size

@@ -56,10 +56,10 @@ class WalletVerifier:
             matches = expected_checksum == derived_checksum
             
             if matches:
-                logger.info(f"✓ Wallet address verified: {derived_checksum}")
+                logger.info(f"[OK] Wallet address verified: {derived_checksum}")
             else:
                 logger.error(
-                    f"✗ Wallet address mismatch!\n"
+                    f"[FAIL] Wallet address mismatch!\n"
                     f"  Expected: {expected_checksum}\n"
                     f"  Derived:  {derived_checksum}"
                 )

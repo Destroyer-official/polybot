@@ -19,8 +19,12 @@ from openai import OpenAI
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
 
-import config
+# Import new production-ready config system
+from config.config import load_config
 import rust_core
+
+# Load configuration
+config = load_config()
 
 # -------------------------
 # basic env & flags
@@ -48,12 +52,26 @@ logger.info(f"DRY_RUN={DRY_RUN} AI_CHECK_INTERVAL={AI_CHECK_INTERVAL}s AI_MAX_AT
 
 # -------------------------
 # web3 & clients
-web3 = config.web3  # config.py has web3 instance
-ADDRESS = config.BOT_ADDRESS
+from web3 import Web3
+web3 = Web3(Web3.HTTPProvider(config.polygon_rpc_url))
+account = web3.eth.account.from_key(config.private_key)
+ADDRESS = account.address
 
 # Clob client (if available)
 try:
-    client = ClobClient(config.POLYMARKET_CLOB, key=config.PRIVATE_KEY, chain_id=config.CHAIN_ID)
+    # Detect wallet type for proper signature_type
+    from src.wallet_type_detector import WalletTypeDetector
+    detector = WalletTypeDetector(web3)
+    wallet_type, signature_type, funder_address = detector.detect_wallet_type(ADDRESS)
+    logger.info(f"Wallet type: {wallet_type}, Signature type: {signature_type}")
+    
+    client = ClobClient(
+        host=config.polymarket_api_url,
+        key=config.private_key,
+        chain_id=config.chain_id,
+        signature_type=signature_type,
+        funder=funder_address
+    )
     creds = client.create_or_derive_api_creds()
     client.set_api_creds(creds)
     logger.info("Polymarket CLOB client initialized.")
@@ -62,8 +80,15 @@ except Exception:
     client = None
 
 # AI client
-ai_client = OpenAI(base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-                   api_key=config.NVIDIA_API_KEY)
+ai_client = None
+if config.nvidia_api_key:
+    ai_client = OpenAI(
+        base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        api_key=config.nvidia_api_key
+    )
+    logger.info("AI client initialized")
+else:
+    logger.warning("No NVIDIA API key - AI safety checks disabled")
 
 # BUY constant loader (robust)
 try:
@@ -173,6 +198,13 @@ def check_market_safety():
     if now - _last_ai_time < AI_CHECK_INTERVAL:
         return _cached_ai_result
 
+    # If no AI client, skip AI check
+    if not ai_client:
+        logger.debug("No AI client - skipping AI safety check")
+        _last_ai_time = time.time()
+        _cached_ai_result = True
+        return True
+
     # 1) Run the hardened AI check (reuse existing logic)
     ai_safe = False
     try:
@@ -235,16 +267,16 @@ def check_market_safety():
     # Local heuristic: funds/gas/pending checks
     try:
         eth_bal = get_eth_balance()  # returns MATIC/ETH in native token
-        usdc_bal = get_erc20_balance(config.USDC_TOKEN, getattr(config, "USDC_DECIMALS", 6))
+        usdc_bal = get_erc20_balance(config.usdc_address, 6)
         gas_gwei = (web3.eth.gas_price or 0) / 1e9
         pending_nonce = web3.eth.get_transaction_count(ADDRESS, "pending")
         latest_nonce = web3.eth.get_transaction_count(ADDRESS, "latest")
         pending_txs = max(0, pending_nonce - latest_nonce)
 
         # thresholds (configurable by env)
-        MIN_MATIC_TH = float(os.getenv("MIN_MATIC_THRESHOLD", config.MIN_MATIC if hasattr(config, "MIN_MATIC") else 0.1))
-        MIN_USDC_TH = float(os.getenv("MIN_USDC_THRESHOLD", config.KEEP_AMOUNT if hasattr(config, "KEEP_AMOUNT") else 50.0))
-        GAS_MAX_GWEI = float(os.getenv("GAS_MAX_GWEI", "800"))  # conservative high ceiling for polygon
+        MIN_MATIC_TH = float(os.getenv("MIN_MATIC_THRESHOLD", "0.1"))
+        MIN_USDC_TH = float(os.getenv("MIN_USDC_THRESHOLD", str(config.min_balance)))
+        GAS_MAX_GWEI = float(os.getenv("GAS_MAX_GWEI", str(config.max_gas_price_gwei)))
 
         logger.info("Heuristic check: MATIC=%.4f (need>=%.4f) USDC=%.4f (need>=%.4f) gas_gwei=%.2f (max=%.1f) pending_txs=%d",
                     eth_bal, MIN_MATIC_TH, usdc_bal, MIN_USDC_TH, gas_gwei, GAS_MAX_GWEI, pending_txs)
@@ -279,12 +311,12 @@ def safe_post_order(price, size, side, token_id):
 
 def merge_positions(condition_id):
     logger.info("Merging positions for %s", condition_id)
-    if DRY_RUN:
+    if DRY_RUN or config.dry_run:
         logger.info("DRY_RUN: skipping merge tx send")
         return True
     try:
-        c = web3.eth.contract(address=config.CONDITIONAL_TOKEN, abi=MERGE_ABI)
-        amount_wei = int(config.STAKE_AMOUNT * (10 ** getattr(config, "USDC_DECIMALS", 6)))
+        c = web3.eth.contract(address=config.conditional_token_address, abi=MERGE_ABI)
+        amount_wei = int(float(config.stake_amount) * (10 ** 6))
         tx = c.functions.mergePositions("0x" + "0" * 64, condition_id, [1, 2], amount_wei).build_transaction({
             "from": ADDRESS,
             "nonce": web3.eth.get_transaction_count(ADDRESS),
@@ -296,7 +328,7 @@ def merge_positions(condition_id):
                 tx["gas"] = int(web3.eth.estimate_gas(tx) * 1.2)
             except Exception:
                 pass
-        signed = web3.eth.account.sign_transaction(tx, config.PRIVATE_KEY)
+        signed = web3.eth.account.sign_transaction(tx, config.private_key)
         txh = web3.eth.send_raw_transaction(signed.rawTransaction)
         logger.info("Merge tx sent: %s", txh.hex())
         return True
@@ -305,27 +337,22 @@ def merge_positions(condition_id):
         return False
 
 def withdraw_profits():
-    logger.info("Checking withdrawable profits (DRY_RUN=%s)", DRY_RUN)
+    logger.info("Checking withdrawable profits (DRY_RUN=%s)", DRY_RUN or config.dry_run)
     try:
-        c = web3.eth.contract(address=config.USDC_TOKEN, abi=ERC20_ABI)
+        c = web3.eth.contract(address=config.usdc_address, abi=ERC20_ABI)
         raw = c.functions.balanceOf(ADDRESS).call()
-        balance = raw / (10 ** getattr(config, "USDC_DECIMALS", 6))
+        balance = raw / (10 ** 6)
         logger.info("USDC balance: %s", balance)
-        if balance > config.WITHDRAW_LIMIT:
-            amount_to_send = balance - config.KEEP_AMOUNT
-            logger.info("Withdrawing %s USDC to %s", amount_to_send, config.SAFE_WALLET)
-            if DRY_RUN:
+        if balance > float(config.withdraw_limit):
+            amount_to_send = balance - float(config.target_balance)
+            # Note: config doesn't have SAFE_WALLET, so we'll skip auto-withdraw
+            logger.info("Would withdraw %s USDC (but no SAFE_WALLET configured)", amount_to_send)
+            if DRY_RUN or config.dry_run:
                 logger.info("DRY_RUN: not sending withdraw tx")
                 return False
-            tx = c.functions.transfer(config.SAFE_WALLET, int(amount_to_send * (10 ** getattr(config, "USDC_DECIMALS", 6)))).build_transaction({
-                "from": ADDRESS,
-                "nonce": web3.eth.get_transaction_count(ADDRESS),
-                "gasPrice": web3.eth.gas_price
-            })
-            signed = web3.eth.account.sign_transaction(tx, config.PRIVATE_KEY)
-            txh = web3.eth.send_raw_transaction(signed.rawTransaction)
-            logger.info("Withdraw tx sent: %s", txh.hex())
-            return True
+            # Skip actual withdrawal since we don't have a safe wallet configured
+            logger.warning("Auto-withdrawal disabled - no SAFE_WALLET in config")
+            return False
         return False
     except Exception:
         logger.exception("withdraw_profits error")
@@ -339,7 +366,7 @@ def heartbeat(markets_scanned):
     global _last_usdc
     try:
         eth_bal = get_eth_balance()
-        usdc_bal = get_erc20_balance(config.USDC_TOKEN, getattr(config, "USDC_DECIMALS", 6))
+        usdc_bal = get_erc20_balance(config.usdc_address, 6)
         gp = get_gas_price() / 1e9 if get_gas_price() else None
         pending_nonce = web3.eth.get_transaction_count(ADDRESS, "pending")
         latest_nonce = web3.eth.get_transaction_count(ADDRESS, "latest")
@@ -393,11 +420,11 @@ def main():
                         continue
                     # rust arb scanner
                     mj = json.dumps(m)
-                    found, yes_p, no_p = rust_core.find_arb(mj, config.MIN_PROFIT)
+                    found, yes_p, no_p = rust_core.find_arb(mj, float(config.min_profit_threshold))
                     if found:
                         logger.info("ARB found: %s YES=%s NO=%s", m.get("question"), yes_p, no_p)
-                        r1 = safe_post_order(yes_p, config.STAKE_AMOUNT, BUY, m['tokens'][0]['token_id'])
-                        r2 = safe_post_order(no_p, config.STAKE_AMOUNT, BUY, m['tokens'][1]['token_id'])
+                        r1 = safe_post_order(yes_p, float(config.stake_amount), BUY, m['tokens'][0]['token_id'])
+                        r2 = safe_post_order(no_p, float(config.stake_amount), BUY, m['tokens'][1]['token_id'])
                         if r1.get("ok") and r2.get("ok"):
                             logger.info("Orders posted ok -> merging")
                             merge_positions(m['condition_id'])

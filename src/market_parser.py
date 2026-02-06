@@ -36,7 +36,7 @@ class MarketParser:
         'condition_id',
         'question',
         'tokens',
-        'end_date_iso',
+        # Note: end_date_iso is optional - some markets don't have it
     ]
     
     # Crypto assets we trade
@@ -130,30 +130,38 @@ class MarketParser:
             volume = self._parse_decimal(raw_market.get('volume', '0')) or Decimal('0')
             liquidity = self._parse_decimal(raw_market.get('liquidity', '0')) or Decimal('0')
             
-            # Parse end time
+            # Parse end time (optional - some markets don't have it)
             end_time = self._parse_datetime(raw_market.get('end_date_iso'))
-            if end_time is None:
-                self._skip_market(market_id, "invalid_end_time")
-                logger.warning(f"Market {market_id} has invalid end_time, skipping")
+            
+            # If end_time is available, check if expired (Requirement 17.6)
+            # Note: We're more lenient now - only skip if clearly expired
+            if end_time is not None and self._is_expired(end_time):
+                # Only skip if expired by more than 30 days (to avoid timezone issues)
+                days_expired = (datetime.now(timezone.utc) - end_time).days
+                if days_expired > 30:
+                    self._skip_market(market_id, "expired")
+                    logger.debug(f"Market {market_id} is expired by {days_expired} days, skipping")
+                    return None
+            
+            # Skip closed markets (they're not tradeable)
+            if raw_market.get('closed', False):
+                self._skip_market(market_id, "closed")
+                logger.debug(f"Market {market_id} is closed, skipping")
                 return None
             
-            # Check if market is expired (Requirement 17.6)
-            if self._is_expired(end_time):
-                self._skip_market(market_id, "expired")
-                logger.debug(f"Market {market_id} is expired, skipping")
-                return None
+            # Note: We don't check accepting_orders anymore because API returns stale data
+            # If a market is not closed, we assume it's tradeable
             
-            # Determine asset from question
+            # Determine asset from question (optional - for categorization)
             asset = self._extract_asset(question)
+            # Note: We don't skip non-crypto markets anymore - trade ALL markets for max opportunities
             if asset is None:
-                self._skip_market(market_id, "non_crypto")
-                logger.debug(f"Market {market_id} is not a crypto market, skipping")
-                return None
+                asset = "OTHER"  # Default category for non-crypto markets
             
             # Extract resolution source
             resolution_source = raw_market.get('resolution_source', 'unknown')
             
-            # Create Market object
+            # Create Market object (end_time may be None)
             market = Market(
                 market_id=market_id,
                 question=question,
@@ -165,15 +173,17 @@ class MarketParser:
                 no_token_id=no_token_id,
                 volume=volume,
                 liquidity=liquidity,
-                end_time=end_time,
+                end_time=end_time or datetime(2099, 12, 31, tzinfo=timezone.utc),  # Default far future if no end_time
                 resolution_source=resolution_source
             )
             
             # Filter to 15-minute crypto markets only (Requirement 17.4)
-            if not market.is_crypto_15min():
-                self._skip_market(market_id, "not_15min_crypto")
-                logger.debug(f"Market {market_id} is not a 15-minute crypto market, skipping")
-                return None
+            # DISABLED: We now trade ALL markets for maximum opportunities
+            # Research shows top bots scan all markets, not just crypto
+            # if not market.is_crypto_15min():
+            #     self._skip_market(market_id, "not_15min_crypto")
+            #     logger.debug(f"Market {market_id} is not a 15-minute crypto market, skipping")
+            #     return None
             
             self.markets_parsed += 1
             logger.debug(f"Successfully parsed market {market_id}: {question}")
