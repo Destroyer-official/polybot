@@ -175,7 +175,14 @@ class NegRiskArbitrageEngine:
                 markets_list = response
             else:
                 logger.warning(f"Unexpected response type: {type(response)}")
-                return []
+                # Use Gamma API as fallback
+                logger.info("Falling back to Gamma API for NegRisk markets...")
+                import requests
+                gamma_resp = requests.get("https://gamma-api.polymarket.com/markets?closed=false&limit=100")
+                if gamma_resp.status_code == 200:
+                    markets_list = gamma_resp.json()
+                else:
+                    return []
             
             # Group markets by condition_id to find NegRisk markets
             condition_groups: Dict[str, List[Dict]] = {}

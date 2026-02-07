@@ -1054,6 +1054,11 @@ class MainOrchestrator:
         # Perform initial heartbeat
         await self.heartbeat_check()
         
+        # Start strategies that require initialization (Requirements 5.4, 5.5)
+        if hasattr(self, 'fifteen_min_strategy') and self.fifteen_min_strategy:
+            logger.info("Starting 15-Minute Crypto Strategy price feed...")
+            await self.fifteen_min_strategy.start()
+        
         try:
             while self.running and not self.shutdown_requested:
                 loop_start = time.time()
@@ -1156,6 +1161,11 @@ class MainOrchestrator:
         
         # Close connections
         logger.info("Closing connections...")
+        
+        # Stop strategies
+        if hasattr(self, 'fifteen_min_strategy') and self.fifteen_min_strategy:
+            await self.fifteen_min_strategy.stop()
+        
         # Web3 connections are stateless, no need to close
         
         # Final statistics

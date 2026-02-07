@@ -15,6 +15,7 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
+from types import SimpleNamespace
 from collections import deque
 
 from py_clob_client.client import ClobClient
@@ -226,19 +227,25 @@ class FlashCrashStrategy:
                         size=shares,
                         side=BUY,
                     ),
-                    options={
-                        "tick_size": "0.01",
-                        "neg_risk": is_negrisk,
-                    },
-                    order_type=OrderType.GTC
+                    options=SimpleNamespace(
+                        tick_size="0.01",
+                        neg_risk=is_negrisk,
+                    )
                 )
-            except TypeError:
+            except TypeError as e:
+                logger.warning(f"First order attempt failed: {e}. Trying fallback...")
                 # Fallback for older py_clob_client versions
                 order = self.clob_client.create_order(
-                    token_id=token_id,
-                    price=float(price),
-                    size=shares,
-                    side="BUY"
+                    OrderArgs(
+                        token_id=token_id,
+                        price=float(price),
+                        size=shares,
+                        side=BUY,
+                    ),
+                    options=SimpleNamespace(
+                        tick_size="0.01",
+                        neg_risk=is_negrisk,
+                    )
                 )
                 response = self.clob_client.post_order(order)
             

@@ -18,6 +18,7 @@ import logging
 from decimal import Decimal
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List, Tuple
+from types import SimpleNamespace
 from dataclasses import dataclass
 from collections import deque
 
@@ -93,10 +94,17 @@ class BinancePriceFeed:
     
     async def _run_websocket(self):
         """Connect to Binance WebSocket for real-time prices."""
-        url = "wss://stream.binance.com:9443/ws/btcusdt@trade/ethusdt@trade"
+        urls = [
+            "wss://stream.binance.com:9443/ws/btcusdt@trade/ethusdt@trade",
+            "wss://stream.binance.us:9443/ws/btcusdt@trade/ethusdt@trade"
+        ]
+        
+        current_url_index = 0
         
         while self.is_running:
+            url = urls[current_url_index]
             try:
+                logger.info(f"Connecting to Binance: {url.split('://')[1].split('/')[0]}...")
                 async with aiohttp.ClientSession() as session:
                     async with session.ws_connect(url) as ws:
                         logger.info("✅ Connected to Binance WebSocket")
@@ -105,10 +113,18 @@ class BinancePriceFeed:
                             if msg.type == aiohttp.WSMsgType.TEXT:
                                 await self._process_message(msg.data)
                             elif msg.type == aiohttp.WSMsgType.ERROR:
+                                logger.error(f"WebSocket error: {msg.data}")
                                 break
                                 
             except Exception as e:
-                logger.error(f"Binance WebSocket error: {e}")
+                error_str = str(e)
+                logger.error(f"Binance WebSocket error: {error_str}")
+                
+                # Check for 451 (Unavailable For Legal Reasons - Geo-blocking)
+                if "451" in error_str or "status" in error_str.lower():
+                    logger.warning("⚠️  Binance.com blocked (451). Switching to Binance.US...")
+                    current_url_index = 1 - current_url_index  # Toggle between 0 and 1
+                
                 await asyncio.sleep(5)  # Reconnect after 5 seconds
     
     async def _process_message(self, data: str):
@@ -524,19 +540,35 @@ class FifteenMinuteCryptoStrategy:
         
         try:
             # Place order using correct API
-            response = self.clob_client.create_and_post_order(
-                OrderArgs(
-                    token_id=token_id,
-                    price=float(price),
-                    size=shares,
-                    side=BUY,
-                ),
-                options={
-                    "tick_size": "0.01",
-                    "neg_risk": market.neg_risk,
-                },
-                order_type=OrderType.GTC
-            )
+            try:
+                response = self.clob_client.create_and_post_order(
+                    OrderArgs(
+                        token_id=token_id,
+                        price=float(price),
+                        size=shares,
+                        side=BUY,
+                    ),
+                    options=SimpleNamespace(
+                        tick_size="0.01",
+                        neg_risk=market.neg_risk,
+                    )
+                )
+            except TypeError as e:
+                logger.warning(f"First order attempt failed: {e}. Trying fallback...")
+                # Fallback
+                order = self.clob_client.create_order(
+                    OrderArgs(
+                        token_id=token_id,
+                        price=float(price),
+                        size=shares,
+                        side=BUY,
+                    ),
+                    options=SimpleNamespace(
+                        tick_size="0.01",
+                        neg_risk=market.neg_risk,
+                    )
+                )
+                response = self.clob_client.post_order(order)
             
             if response:
                 order_id = "unknown"
