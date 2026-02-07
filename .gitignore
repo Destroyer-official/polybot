@@ -2,6 +2,7 @@
 .env
 *.env
 !.env.example
+*.pem
 
 # Python
 venv/
@@ -17,19 +18,26 @@ dist/
 build/
 .pytest_cache/
 .hypothesis/
+.coverage
+
+# Archive folder (old dev files)
+_archive/
 
 # Rust
 rust_core/target/
 Cargo.lock
 
-# Logs
+# Logs and data
 logs/*.log
 logs/*.json
+data/*.json
+*.log
 !logs/.gitkeep
 
 # IDE
 .vscode/
 .idea/
+.kiro/
 *.swp
 *.swo
 *~
@@ -46,3 +54,4 @@ config/config.yaml
 *.db
 *.sqlite
 *.sqlite3
+state.json

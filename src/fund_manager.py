@@ -112,6 +112,9 @@ class FundManager:
         self.dry_run = dry_run
         self.oneinch_api_key = oneinch_api_key
         
+        # Flag to show proxy wallet warning only once
+        self._proxy_warning_shown = False
+        
         # Load USDC contract ABI (minimal ERC20)
         self.usdc_contract = self.web3.eth.contract(
             address=self.usdc_address,
@@ -535,33 +538,54 @@ class FundManager:
         """
         Get Polymarket balance using py-clob-client.
         
-        IMPORTANT: When you deposit via Polymarket website, your funds go to a
-        PROXY WALLET that Polymarket creates automatically. The CLOB API handles
-        this proxy wallet transparently when placing orders.
-        
-        Since we can't easily check the proxy wallet balance, we return a
-        placeholder value. The actual balance check happens when placing orders
-        via the CLOB API - it will reject orders if there's insufficient balance.
+        Uses the CLOB API with proper authentication to get actual balance.
+        This is the same method used in balance.py which works correctly.
         
         Returns:
-            Decimal: Polymarket balance in USDC (placeholder for proxy wallet)
+            Decimal: Polymarket balance in USDC
         """
         try:
-            # When you deposit via Polymarket website, the funds are in a proxy wallet
-            # The CLOB API handles this automatically when placing orders
-            # We can't easily check the proxy wallet balance, but we don't need to
-            # The API will reject orders if there's insufficient balance
+            import os
+            from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
             
-            logger.debug("Polymarket balance: Using proxy wallet (managed by CLOB API)")
+            # Get private key from environment
+            private_key = os.getenv("PRIVATE_KEY", "")
+            wallet_address = self.wallet.address
             
-            # Return a placeholder balance that allows the bot to attempt trading
-            # The actual balance check happens at order placement time
-            # If the user has deposited $4.23, this allows trading to proceed
-            return Decimal('10.0')  # Placeholder - actual balance managed by CLOB API
+            if not private_key:
+                logger.warning("No PRIVATE_KEY found - cannot check CLOB balance")
+                return Decimal('0.0')
+            
+            # Create CLOB client with signature_type=2 (proxy wallet)
+            client = ClobClient(
+                host="https://clob.polymarket.com",
+                chain_id=137,
+                key=private_key,
+                signature_type=2,  # Browser wallet proxy (Gnosis Safe)
+                funder=wallet_address
+            )
+            
+            # Derive API credentials - same as working balance.py
+            client.set_api_creds(client.create_or_derive_api_creds())
+            
+            # Get balance with proper params
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            balance_info = client.get_balance_allowance(params)
+            
+            # USDC has 6 decimals
+            raw_balance = float(balance_info.get('balance', 0))
+            usdc_balance = Decimal(str(raw_balance)) / Decimal('1000000')
+            
+            logger.debug(f"CLOB balance query: raw={raw_balance}, usdc=${usdc_balance:.2f}")
+            
+            return usdc_balance
             
         except Exception as e:
-            logger.debug(f"Balance check: {e}")
-            return Decimal('10.0')  # Placeholder
+            logger.debug(f"CLOB balance check error: {e}")
+            # Fallback to placeholder if CLOB API fails
+            return Decimal('0.0')
+
     
     async def _execute_cross_chain_swap(
         self,

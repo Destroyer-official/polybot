@@ -107,21 +107,36 @@ class InternalArbitrageEngine:
         """
         opportunities = []
         
+        logger.info(f"🔍 SCANNING {len(markets)} markets for arbitrage opportunities...")
+        logger.info(f"📊 Min profit threshold: {self.min_profit_threshold*100:.2f}%")
+        
+        # Track rejection reasons
+        not_crypto_15min = 0
+        not_profitable = 0
+        below_threshold = 0
+        
         for market in markets:
             try:
-                # Skip if not a valid crypto 15-minute market
-                if not market.is_crypto_15min():
-                    continue
+                # REMOVED FILTER: Trade on ALL markets, not just crypto 15-minute markets
+                # The user wants maximum trading opportunities
                 
                 # Get prices (already in Decimal from Market model)
                 yes_price = market.yes_price
                 no_price = market.no_price
+                
+                # Log first 3 markets to show what we're seeing
+                if len(opportunities) == 0 and not_profitable < 3:
+                    logger.info(f"   Sample market: YES=${yes_price} NO=${no_price} SUM=${yes_price+no_price}")
+                
+                logger.debug(f"Market {market.market_id[:20]}... YES=${yes_price} NO=${no_price} SUM=${yes_price+no_price}")
                 
                 # Calculate profit using Rust fee calculator
                 profit = self.calculate_profit(yes_price, no_price)
                 
                 # Check if profitable (Requirement 1.2, 2.4)
                 if profit is None or profit <= 0:
+                    logger.debug(f"  ❌ Not profitable: profit={profit}")
+                    not_profitable += 1
                     continue
                 
                 # Calculate profit percentage
@@ -133,9 +148,10 @@ class InternalArbitrageEngine:
                 # Filter by minimum profit threshold (Requirement 2.4)
                 if profit_percentage < self.min_profit_threshold:
                     logger.debug(
-                        f"Skipping {market.market_id}: profit {profit_percentage*100:.2f}% "
+                        f"  ⚠️  Below threshold: profit {profit_percentage*100:.4f}% "
                         f"< threshold {self.min_profit_threshold*100}%"
                     )
+                    below_threshold += 1
                     continue
                 
                 # Estimate gas cost for the trade
@@ -161,7 +177,7 @@ class InternalArbitrageEngine:
                 opportunities.append(opportunity)
                 
                 logger.info(
-                    f"Found internal arbitrage: {market.market_id} | "
+                    f"✅ FOUND ARBITRAGE: {market.market_id[:30]}... | "
                     f"YES=${yes_price} NO=${no_price} | "
                     f"Profit=${profit} ({profit_percentage*100:.2f}%)"
                 )
@@ -169,6 +185,14 @@ class InternalArbitrageEngine:
             except Exception as e:
                 logger.error(f"Error scanning market {market.market_id}: {e}")
                 continue
+        
+        if len(opportunities) == 0:
+            logger.warning(f"⚠️  NO OPPORTUNITIES FOUND in {len(markets)} markets")
+            logger.warning(f"   Rejected: {not_crypto_15min} not crypto/15min, {not_profitable} not profitable, {below_threshold} below threshold")
+            logger.warning(f"   This means YES+NO prices are too high (> ${1.0 - float(self.min_profit_threshold):.4f})")
+            logger.warning(f"   Try lowering MIN_PROFIT_THRESHOLD in .env")
+        else:
+            logger.info(f"✅ Found {len(opportunities)} opportunities!")
         
         logger.debug(f"Scanned {len(markets)} markets, found {len(opportunities)} opportunities")
         return opportunities

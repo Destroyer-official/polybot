@@ -67,6 +67,13 @@ class Config:
     # Chain ID
     chain_id: int = 137  # Polygon mainnet
     
+    # Flash Crash Strategy settings
+    flash_crash_drop_threshold: float = 0.20  # 20% drop
+    flash_crash_lookback_seconds: int = 10
+    flash_crash_trade_size: float = 5.0
+    flash_crash_take_profit: float = 0.10
+    flash_crash_stop_loss: float = 0.05
+    
     def __post_init__(self):
         """Validate configuration after initialization."""
         self._validate()
@@ -243,6 +250,13 @@ class Config:
             
             # Chain ID
             chain_id=int(os.getenv("CHAIN_ID", "137")),
+            
+            # Flash Crash Strategy
+            flash_crash_drop_threshold=float(os.getenv("FLASH_CRASH_DROP_THRESHOLD", "0.20")),
+            flash_crash_lookback_seconds=int(os.getenv("FLASH_CRASH_LOOKBACK_SECONDS", "10")),
+            flash_crash_trade_size=float(os.getenv("FLASH_CRASH_TRADE_SIZE", "5.0")),
+            flash_crash_take_profit=float(os.getenv("FLASH_CRASH_TAKE_PROFIT", "0.10")),
+            flash_crash_stop_loss=float(os.getenv("FLASH_CRASH_STOP_LOSS", "0.05")),
         )
     
     @classmethod
