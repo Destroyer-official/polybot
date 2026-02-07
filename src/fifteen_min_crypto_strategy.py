@@ -304,6 +304,16 @@ class FifteenMinuteCryptoStrategy:
                                 for m in event_markets:
                                     # Extract token IDs
                                     token_ids = m.get("clobTokenIds", [])
+                                    if isinstance(token_ids, str):
+                                        import json
+                                        try:
+                                            # Debug log for verification
+                                            # logger.info(f"Parsing string token_ids: {token_ids[:50]}...")
+                                            token_ids = json.loads(token_ids)
+                                        except Exception as e:
+                                            logger.error(f"Failed to parse token_ids: {e}")
+                                            continue
+                                        
                                     if len(token_ids) >= 2:
                                         up_token = token_ids[0]  # First is Up/Yes
                                         down_token = token_ids[1]  # Second is Down/No
