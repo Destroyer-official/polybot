@@ -1,0 +1,14 @@
+========================================
+8-HOUR BOT PERFORMANCE CHECK REMINDER
+========================================
+
+Bot Restart Time: February 9, 2026 10:03 UTC
+Check Time: February 9, 2026 18:03 UTC (8 hours later)
+
+TO CHECK PERFORMANCE, RUN:
+bash check_8hr_performance.sh
+
+OR FOLLOW INSTRUCTIONS IN:
+8HR_CHECK_INSTRUCTIONS.md
+
+========================================

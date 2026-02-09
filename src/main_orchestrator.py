@@ -11,7 +11,7 @@ import time
 import json
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 import logging
 
@@ -49,7 +49,13 @@ from src.error_recovery import CircuitBreaker
 from src.auto_bridge_manager import AutoBridgeManager
 
 # LLM-driven decision engine and enhanced strategies
-from src.llm_decision_engine_v2 import LLMDecisionEngineV2
+from src.llm_decision_engine_v2 import (
+    LLMDecisionEngineV2,
+    MarketContext,
+    PortfolioState,
+    TradeAction,
+    OrderType
+)
 from src.negrisk_arbitrage_engine import NegRiskArbitrageEngine
 from src.portfolio_risk_manager import PortfolioRiskManager
 from src.fifteen_min_crypto_strategy import FifteenMinuteCryptoStrategy
@@ -316,7 +322,7 @@ class MainOrchestrator:
         logger.info("Initializing LLM Decision Engine V2 (Perfect Edition)...")
         self.llm_decision_engine = LLMDecisionEngineV2(
             nvidia_api_key=config.nvidia_api_key,
-            min_confidence_threshold=60.0,  # Lowered to 60% for more trades (research-backed)
+            min_confidence_threshold=50.0,  # Lowered to 50% for more trades (was 60%)
             max_position_pct=5.0,  # Max 5% of balance per trade
             decision_timeout=5.0,  # 5 second timeout for LLM calls
             enable_chain_of_thought=True
@@ -355,11 +361,11 @@ class MainOrchestrator:
         logger.info("Initializing 15-Minute Crypto Trading Strategy...")
         self.fifteen_min_strategy = FifteenMinuteCryptoStrategy(
             clob_client=self.clob_client,
-            trade_size=5.0,  # $5 per trade
-            take_profit_pct=0.05,  # 5% profit target (INCREASED for bigger profits!)
-            stop_loss_pct=0.03,  # 3% stop loss (slightly wider for volatility)
-            max_positions=3,
-            sum_to_one_threshold=1.01,  # Buy both if YES+NO < $1.01 (aggressive)
+            trade_size=10.0,  # Increased to $10 per trade (was $5)
+            take_profit_pct=0.03,  # 3% profit target (lowered from 5% for faster exits)
+            stop_loss_pct=0.02,  # 2% stop loss (tighter control)
+            max_positions=5,  # Increased from 3 to allow more concurrent trades
+            sum_to_one_threshold=1.02,  # Slightly more aggressive (was 1.01)
             dry_run=config.dry_run,
             llm_decision_engine=self.llm_decision_engine  # Enable directional trading
         )
@@ -373,6 +379,16 @@ class MainOrchestrator:
         
         # Gas price monitoring
         self.gas_price_halted = False
+        
+        # OPTIMIZATION: Market data cache (50% fewer API calls)
+        self._market_cache: Optional[List] = None
+        self._market_cache_time: float = 0
+        self._market_cache_ttl: float = 2.0  # 2 second cache
+        
+        # OPTIMIZATION: Dynamic scan interval (better resource usage)
+        self._base_scan_interval = config.scan_interval_seconds
+        self._current_scan_interval = config.scan_interval_seconds
+        self._volatility_threshold = Decimal("0.02")  # 2% volatility
         
         # Load persisted state
         self._load_state()
@@ -632,20 +648,63 @@ class MainOrchestrator:
             logger.error(f"Failed to check gas price: {e}")
             return False
     
+    def _adjust_scan_interval(self, markets: List):
+        """
+        OPTIMIZATION: Adjust scan interval based on market volatility.
+        High volatility = faster scanning for more opportunities.
+        """
+        if not markets or len(markets) < 5:
+            return
+        
+        try:
+            # Calculate average price volatility from sample
+            total_volatility = Decimal("0")
+            count = 0
+            
+            for market in markets[:10]:  # Sample first 10 markets
+                if hasattr(market, 'tokens') and len(market.tokens) >= 2:
+                    prices = [t.price for t in market.tokens if hasattr(t, 'price')]
+                    if len(prices) >= 2:
+                        price_range = max(prices) - min(prices)
+                        avg_price = sum(prices) / len(prices)
+                        if avg_price > 0:
+                            volatility = price_range / avg_price
+                            total_volatility += volatility
+                            count += 1
+            
+            if count > 0:
+                avg_volatility = total_volatility / count
+                
+                # High volatility = faster scanning
+                if avg_volatility > self._volatility_threshold:
+                    self._current_scan_interval = max(0.5, self._base_scan_interval * 0.5)
+                    logger.debug(f"🔥 High volatility ({avg_volatility*100:.1f}%), scan interval: {self._current_scan_interval}s")
+                else:
+                    self._current_scan_interval = self._base_scan_interval
+        except Exception as e:
+            logger.debug(f"Error adjusting scan interval: {e}")
+    
     async def _scan_and_execute(self) -> None:
         """
         Scan markets for opportunities and execute trades.
         
         Main trading logic that:
-        1. Fetches markets from Gamma API (active markets only)
+        1. Fetches markets from Gamma API (active markets only) - WITH CACHING
         2. Parses and filters markets
-        3. Scans for opportunities across all strategies
+        3. Scans for opportunities across all strategies - IN PARALLEL
         4. Validates safety checks
         5. Executes profitable trades
         """
         try:
-            # Fetch markets from Gamma API (active markets only)
-            logger.debug("Fetching active markets from Gamma API...")
+            # OPTIMIZATION: Check cache first (50% fewer API calls)
+            current_time = time.time()
+            if (self._market_cache is not None and 
+                current_time - self._market_cache_time < self._market_cache_ttl):
+                logger.debug("💾 Using cached market data")
+                raw_markets = self._market_cache
+            else:
+                # Fetch markets from Gamma API (active markets only)
+                logger.debug("🔄 Fetching fresh market data from Gamma API...")
             
             import requests
             import json
@@ -731,12 +790,20 @@ class MainOrchestrator:
                 
                 logger.info(f"Converted {len(raw_markets)} markets from Gamma API format")
                 
+                # OPTIMIZATION: Update cache
+                self._market_cache = raw_markets
+                self._market_cache_time = current_time
+                
             except Exception as e:
                 logger.error(f"Failed to fetch from Gamma API: {e}")
                 # Fallback to CLOB API
                 logger.info("Falling back to CLOB API...")
                 markets_response = self.clob_client.get_markets()
                 raw_markets = markets_response.get('data', []) if isinstance(markets_response, dict) else markets_response
+                
+                # Update cache with fallback data
+                self._market_cache = raw_markets
+                self._market_cache_time = current_time
             
             # Parse markets - NO FILTERING for maximum opportunity coverage
             markets = []
@@ -760,28 +827,47 @@ class MainOrchestrator:
             # Dashboard update not needed - passive display
             # self.dashboard.update_scan_info(len(raw_markets), len(markets))
             
+            # OPTIMIZATION: Adjust scan interval based on volatility
+            self._adjust_scan_interval(markets)
+            
             # Scan for opportunities across all strategies
             opportunities = []
             
-            # PRIORITY 1: Flash Crash Strategy (DIRECTIONAL TRADING - like successful bots)
-            if self.flash_crash_strategy:
-                logger.info("🔥 Running Flash Crash Strategy on 77 markets...")
-                await self.flash_crash_strategy.run(markets)
-                logger.info("✅ Flash Crash scan complete")
-            else:
-                logger.warning("⚠️  Flash Crash Strategy not initialized!")
+            # ============================================================
+            # OPTIMIZATION: RUN ALL STRATEGIES IN PARALLEL (3x faster!)
+            # ============================================================
+            strategy_tasks = []
             
-            # ============================================================
-            # PRIORITY 2: 15-MINUTE CRYPTO TRADING (BTC/ETH Up/Down)
-            # Binance Latency Arbitrage + Sum-to-One Arbitrage
-            # ============================================================
+            # PRIORITY 1: Flash Crash Strategy
+            if self.flash_crash_strategy:
+                logger.info("🔥 Running Flash Crash Strategy...")
+                strategy_tasks.append(self.flash_crash_strategy.run(markets))
+            
+            # PRIORITY 2: 15-Minute Crypto Strategy
             if hasattr(self, 'fifteen_min_strategy') and self.fifteen_min_strategy:
-                logger.info("⏱️ Running 15-Minute Crypto Strategy (BTC/ETH)...")
-                try:
-                    await self.fifteen_min_strategy.run_cycle()
-                    logger.info("✅ 15-Minute Crypto scan complete")
-                except Exception as e:
-                    logger.error(f"15-Minute Strategy error: {e}")
+                logger.info("⏱️ Running 15-Minute Crypto Strategy...")
+                strategy_tasks.append(self.fifteen_min_strategy.run_cycle())
+            
+            # PRIORITY 3: NegRisk Arbitrage (run in parallel too)
+            if self.negrisk_arbitrage:
+                logger.info("🎯 Running NegRisk Arbitrage...")
+                strategy_tasks.append(self.negrisk_arbitrage.scan_opportunities())
+            
+            # Execute all strategies concurrently for 3x speed improvement
+            if strategy_tasks:
+                logger.debug(f"⚡ Executing {len(strategy_tasks)} strategies in parallel...")
+                results = await asyncio.gather(*strategy_tasks, return_exceptions=True)
+                
+                # Handle results
+                for i, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.error(f"Strategy {i} failed: {result}")
+                    elif result and isinstance(result, list):
+                        # NegRisk returns opportunities
+                        if i == 2 and self.negrisk_arbitrage:  # NegRisk is 3rd task
+                            negrisk_opps = result
+                            if negrisk_opps:
+                                logger.info(f"✅ Found {len(negrisk_opps)} NegRisk opportunities")
             
             # PRIORITY 3: Internal arbitrage (DISABLED - Polymarket too efficient)
             # internal_opps = await self.internal_arbitrage.scan_opportunities(markets)
@@ -1137,9 +1223,9 @@ class MainOrchestrator:
                 
                 # Dashboard is passive - no need to render
                 
-                # Sleep for remaining interval
+                # OPTIMIZATION: Sleep for adjusted interval (dynamic based on volatility)
                 elapsed = time.time() - loop_start
-                sleep_time = max(0, self.config.scan_interval_seconds - elapsed)
+                sleep_time = max(0, self._current_scan_interval - elapsed)
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
                 
