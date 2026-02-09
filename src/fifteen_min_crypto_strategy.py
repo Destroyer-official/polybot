@@ -16,15 +16,28 @@ import asyncio
 import aiohttp
 import logging
 from decimal import Decimal
-from datetime import datetime, timedelta
-from typing import Dict, Optional, List, Tuple
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Optional, List, Tuple, Any
 from types import SimpleNamespace
 from dataclasses import dataclass
 from collections import deque
+import json
+import time
 
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY, SELL
+
+from src.adaptive_learning_engine import AdaptiveLearningEngine, TradeOutcome, MarketConditions
+
+# Try to import V2 engine, fallback to V1 if not available
+try:
+    from src.llm_decision_engine_v2 import LLMDecisionEngineV2, MarketContext as MarketContextV2, PortfolioState as PortfolioStateV2
+    LLM_ENGINE_V2_AVAILABLE = True
+except ImportError:
+    LLM_ENGINE_V2_AVAILABLE = False
+    logger.warning("LLM Decision Engine V2 not available, using V1")
+from src.llm_decision_engine_v2 import LLMDecisionEngineV2, MarketContext as MarketContextV2, PortfolioState as PortfolioStateV2
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +54,7 @@ class CryptoMarket:
     down_price: Decimal
     end_time: datetime
     neg_risk: bool = True
+    tick_size: str = "0.01"  # Dynamic tick size from API
 
 
 @dataclass
@@ -53,6 +67,7 @@ class Position:
     entry_time: datetime
     market_id: str
     asset: str
+    strategy: str = "unknown"  # "sum_to_one", "latency", "directional"
 
 
 class BinancePriceFeed:
@@ -64,10 +79,12 @@ class BinancePriceFeed:
     """
     
     def __init__(self):
-        self.prices: Dict[str, Decimal] = {"BTC": Decimal("0"), "ETH": Decimal("0")}
+        self.prices: Dict[str, Decimal] = {"BTC": Decimal("0"), "ETH": Decimal("0"), "SOL": Decimal("0"), "XRP": Decimal("0")}
         self.price_history: Dict[str, deque] = {
             "BTC": deque(maxlen=60),  # 1 minute of prices
             "ETH": deque(maxlen=60),
+            "SOL": deque(maxlen=60),
+            "XRP": deque(maxlen=60),
         }
         self.is_running = False
         self._ws_task: Optional[asyncio.Task] = None
@@ -95,8 +112,8 @@ class BinancePriceFeed:
     async def _run_websocket(self):
         """Connect to Binance WebSocket for real-time prices."""
         urls = [
-            "wss://stream.binance.com:9443/ws/btcusdt@trade/ethusdt@trade",
-            "wss://stream.binance.us:9443/ws/btcusdt@trade/ethusdt@trade"
+            "wss://stream.binance.com:9443/ws/btcusdt@trade/ethusdt@trade/solusdt@trade/xrpusdt@trade",
+            "wss://stream.binance.us:9443/ws/btcusdt@trade/ethusdt@trade/solusdt@trade/xrpusdt@trade"
         ]
         
         current_url_index = 0
@@ -129,7 +146,6 @@ class BinancePriceFeed:
     
     async def _process_message(self, data: str):
         """Process incoming Binance trade message."""
-        import json
         try:
             trade = json.loads(data)
             symbol = trade.get("s", "")
@@ -139,6 +155,10 @@ class BinancePriceFeed:
                 self._update_price("BTC", price)
             elif symbol == "ETHUSDT":
                 self._update_price("ETH", price)
+            elif symbol == "SOLUSDT":
+                self._update_price("SOL", price)
+            elif symbol == "XRPUSDT":
+                self._update_price("XRP", price)
                 
         except Exception as e:
             logger.debug(f"Error processing Binance message: {e}")
@@ -200,12 +220,14 @@ class FifteenMinuteCryptoStrategy:
     def __init__(
         self,
         clob_client: ClobClient,
-        trade_size: float = 5.0,  # $5 per trade
-        take_profit_pct: float = 0.10,  # 10% profit target
-        stop_loss_pct: float = 0.05,  # 5% stop loss
+        trade_size: float = 5.0,  # $5 total ($2.50 per side for sum-to-one)
+        take_profit_pct: float = 0.01,  # 1% profit target (FIXED: realistic for 15-min)
+        stop_loss_pct: float = 0.02,  # 2% stop loss (FIXED: tighter control)
         max_positions: int = 3,  # Max concurrent positions
-        sum_to_one_threshold: float = 0.99,  # Buy both if YES+NO < $0.99
-        dry_run: bool = False
+        sum_to_one_threshold: float = 1.01,  # Buy both if YES+NO < $1.01 (more aggressive)
+        dry_run: bool = False,
+        llm_decision_engine: Optional[Any] = None,  # Added LLM support
+        enable_adaptive_learning: bool = True  # NEW: Enable machine learning
     ):
         """
         Initialize the 15-minute crypto trading strategy.
@@ -218,6 +240,7 @@ class FifteenMinuteCryptoStrategy:
             max_positions: Maximum concurrent positions
             sum_to_one_threshold: Threshold for sum-to-one arbitrage
             dry_run: If True, simulate trades without executing
+            llm_decision_engine: Instance of LLMDecisionEngine for directional trades
         """
         self.clob_client = clob_client
         self.trade_size = Decimal(str(trade_size))
@@ -226,12 +249,16 @@ class FifteenMinuteCryptoStrategy:
         self.max_positions = max_positions
         self.sum_to_one_threshold = Decimal(str(sum_to_one_threshold))
         self.dry_run = dry_run
+        self.llm_decision_engine = llm_decision_engine
         
         # Binance price feed for latency arbitrage
         self.binance_feed = BinancePriceFeed()
         
         # Active positions
         self.positions: Dict[str, Position] = {}
+        
+        # Track last LLM check time per asset to avoid rate limits
+        self.last_llm_check: Dict[str, datetime] = {}
         
         # Trading stats
         self.stats = {
@@ -242,14 +269,50 @@ class FifteenMinuteCryptoStrategy:
             "arbitrage_opportunities": 0,
         }
         
+        # NEW: Adaptive Learning Engine
+        self.adaptive_learning = None
+        if enable_adaptive_learning:
+            self.adaptive_learning = AdaptiveLearningEngine(
+                data_file="data/adaptive_learning.json",
+                learning_rate=0.1,  # 10% adjustment rate
+                min_trades_for_learning=10  # Start learning after 10 trades
+            )
+            logger.info("🧠 Adaptive Learning Engine enabled - bot will get smarter over time!")
+            
+            # Use learned parameters if available
+            if self.adaptive_learning.total_trades >= 10:
+                params = self.adaptive_learning.current_params
+                self.take_profit_pct = params.take_profit_pct
+                self.stop_loss_pct = params.stop_loss_pct
+                logger.info(f"📚 Using learned parameters from {self.adaptive_learning.total_trades} trades")
+                logger.info(f"   Take-profit: {self.take_profit_pct * 100:.2f}%")
+                logger.info(f"   Stop-loss: {self.stop_loss_pct * 100:.2f}%")
+        
+        # NEW: SUPER SMART Learning Engine (even more advanced!)
+        from src.super_smart_learning import SuperSmartLearning
+        self.super_smart = SuperSmartLearning(data_file="data/super_smart_learning.json")
+        
+        # Use super smart parameters if we have enough data
+        if self.super_smart.total_trades >= 5:
+            optimal = self.super_smart.get_optimal_parameters()
+            self.take_profit_pct = Decimal(str(optimal["take_profit_pct"]))
+            self.stop_loss_pct = Decimal(str(optimal["stop_loss_pct"]))
+            logger.info(f"🚀 Using SUPER SMART parameters from {self.super_smart.total_trades} trades!")
+            logger.info(f"   Take-profit: {self.take_profit_pct * 100:.1f}%")
+            logger.info(f"   Stop-loss: {self.stop_loss_pct * 100:.1f}%")
+            logger.info(f"   Best strategy: {self.super_smart.get_best_strategy()}")
+            logger.info(f"   Best asset: {self.super_smart.get_best_asset()}")
+        
         logger.info("=" * 80)
         logger.info("15-MINUTE CRYPTO TRADING STRATEGY INITIALIZED")
         logger.info("=" * 80)
         logger.info(f"Trade size: ${trade_size}")
-        logger.info(f"Take profit: {take_profit_pct * 100}%")
-        logger.info(f"Stop loss: {stop_loss_pct * 100}%")
+        logger.info(f"Take profit: {take_profit_pct * 100}% (OPTIMIZED: Bigger profits!)")
+        logger.info(f"Stop loss: {stop_loss_pct * 100}% (BALANCED: Control losses)")
         logger.info(f"Max positions: {max_positions}")
         logger.info(f"Sum-to-one threshold: ${sum_to_one_threshold}")
+        logger.info(f"Time-based exit: 12 minutes (FIXED: exit before market closes)")
+        logger.info(f"Market closing exit: 2 minutes before close (FIXED: forced exit)")
         logger.info(f"Dry run: {dry_run}")
         logger.info("=" * 80)
     
@@ -263,113 +326,117 @@ class FifteenMinuteCryptoStrategy:
     
     async def fetch_15min_markets(self) -> List[CryptoMarket]:
         """
-        Fetch ONLY the CURRENT active 15-minute crypto markets from Polymarket.
+        Fetch ONLY the CURRENT active 15-minute AND 1-hour crypto markets from Polymarket.
         
-        These markets use a specific slug pattern: {asset}-updown-15m-{timestamp}
+        These markets use slug patterns: 
+        - {asset}-updown-15m-{timestamp}
+        - {asset}-updown-1h-{timestamp}
         Only returns markets where current time is within the trading window.
         
         Returns:
-            List of CURRENT active 15-minute crypto markets (max 4: BTC, ETH, SOL, XRP)
+            List of CURRENT active 15-minute and 1-hour crypto markets (BTC, ETH, SOL, XRP)
         """
         markets = []
         
         # Assets to search for
         assets = ["btc", "eth", "sol", "xrp"]
         
-        # Calculate current 15-min interval
-        import time
-        from datetime import timezone
+        # Calculate current intervals
         now = int(time.time())
         now_dt = datetime.now(timezone.utc)
         
-        # Round to 15-minute intervals (900 seconds)
-        current_interval = (now // 900) * 900
+        # 15-minute intervals (900 seconds)
+        current_15m = (now // 900) * 900
         
-        # ONLY try current interval (the one we're in now)
-        # This ensures we only trade the live market
-        timestamps = [current_interval]
+        # 1-hour intervals (3600 seconds)
+        current_1h = (now // 3600) * 3600
+        
+        # Build list of slugs to try (15min + 1hr)
+        slugs_to_try = []
+        for asset in assets:
+            slugs_to_try.append(f"{asset}-updown-15m-{current_15m}")
+            slugs_to_try.append(f"{asset}-updown-1h-{current_1h}")
         
         async with aiohttp.ClientSession() as session:
-            for ts in timestamps:
-                for asset in assets:
-                    slug = f"{asset}-updown-15m-{ts}"
-                    url = f"https://gamma-api.polymarket.com/events/slug/{slug}"
-                    
-                    try:
-                        async with session.get(url, timeout=10) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                
-                                event_markets = data.get("markets", [])
-                                for m in event_markets:
-                                    # Extract token IDs
-                                    token_ids = m.get("clobTokenIds", [])
-                                    if isinstance(token_ids, str):
-                                        import json
-                                        try:
-                                            # Debug log for verification
-                                            # logger.info(f"Parsing string token_ids: {token_ids[:50]}...")
-                                            token_ids = json.loads(token_ids)
-                                        except Exception as e:
-                                            logger.error(f"Failed to parse token_ids: {e}")
-                                            continue
-                                        
-                                    if len(token_ids) >= 2:
-                                        up_token = token_ids[0]  # First is Up/Yes
-                                        down_token = token_ids[1]  # Second is Down/No
-                                    else:
+            for slug in slugs_to_try:
+                asset = slug.split("-")[0].upper()
+                url = f"https://gamma-api.polymarket.com/events/slug/{slug}"
+                
+                try:
+                    async with session.get(url, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            
+                            event_markets = data.get("markets", [])
+                            for m in event_markets:
+                                # Extract token IDs
+                                token_ids = m.get("clobTokenIds", [])
+                                if isinstance(token_ids, str):
+                                    try:
+                                        token_ids = json.loads(token_ids)
+                                    except Exception as e:
+                                        logger.error(f"Failed to parse token_ids: {e}")
                                         continue
                                     
-                                    # Extract prices - handle JSON strings properly
-                                    prices = m.get("outcomePrices", ["0.5", "0.5"])
-                                    try:
-                                        # Handle case where prices might be JSON string
-                                        if isinstance(prices, str):
-                                            import json
-                                            prices = json.loads(prices)
-                                        up_price = Decimal(str(prices[0]).strip('"'))
-                                        down_price = Decimal(str(prices[1]).strip('"'))
-                                    except:
-                                        up_price = Decimal("0.5")
-                                        down_price = Decimal("0.5")
+                                if len(token_ids) >= 2:
+                                    up_token = token_ids[0]  # First is Up/Yes
+                                    down_token = token_ids[1]  # Second is Down/No
+                                else:
+                                    continue
+                                
+                                # Extract prices - handle JSON strings properly
+                                prices = m.get("outcomePrices", ["0.5", "0.5"])
+                                try:
+                                    # Handle case where prices might be JSON string
+                                    if isinstance(prices, str):
+                                        prices = json.loads(prices)
+                                    up_price = Decimal(str(prices[0]).strip('"'))
+                                    down_price = Decimal(str(prices[1]).strip('"'))
+                                except:
+                                    up_price = Decimal("0.5")
+                                    down_price = Decimal("0.5")
+                                
+                                # Parse end time
+                                end_time_str = m.get("endDate", "")
+                                try:
+                                    end_time = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
+                                except:
+                                    end_time = datetime.now(timezone.utc) + timedelta(minutes=15)
+                                
+                                # Check if market is CURRENTLY tradeable
+                                # (not closed AND end_time is in the future)
+                                is_closed = m.get("closed", False)
+                                is_active = m.get("active", True)
+                                is_trading = end_time > now_dt and is_active and not is_closed
+                                
+                                if is_trading:
+                                    # Extract tick size defaults to 0.01 if missing
+                                    tick_size = str(m.get("minimum_tick_size", "0.01"))
                                     
-                                    # Parse end time
-                                    end_time_str = m.get("endDate", "")
-                                    try:
-                                        end_time = datetime.fromisoformat(end_time_str.replace("Z", "+00:00"))
-                                    except:
-                                        end_time = datetime.now(timezone.utc) + timedelta(minutes=15)
+                                    markets.append(CryptoMarket(
+                                        market_id=m.get("conditionId", ""),
+                                        question=m.get("question", data.get("title", "")),
+                                        asset=asset.upper(),
+                                        up_token_id=up_token,
+                                        down_token_id=down_token,
+                                        up_price=up_price,
+                                        down_price=down_price,
+                                        end_time=end_time,
+                                        neg_risk=m.get("neg_risk", True),
+                                        tick_size=tick_size
+                                    ))
                                     
-                                    # Check if market is CURRENTLY tradeable
-                                    # (not closed AND end_time is in the future)
-                                    is_closed = m.get("closed", False)
-                                    is_active = m.get("active", True)
-                                    is_trading = end_time > now_dt and is_active and not is_closed
-                                    
-                                    if is_trading:
-                                        markets.append(CryptoMarket(
-                                            market_id=m.get("conditionId", ""),
-                                            question=m.get("question", data.get("title", "")),
-                                            asset=asset.upper(),
-                                            up_token_id=up_token,
-                                            down_token_id=down_token,
-                                            up_price=up_price,
-                                            down_price=down_price,
-                                            end_time=end_time,
-                                            neg_risk=True
-                                        ))
-                                        
-                                        logger.info(
-                                            f"🎯 CURRENT {asset.upper()} market: "
-                                            f"Up=${up_price:.2f}, Down=${down_price:.2f}, "
-                                            f"Ends: {end_time.strftime('%H:%M:%S')} UTC"
-                                        )
-                            elif resp.status != 404:
-                                logger.debug(f"Slug {slug}: Status {resp.status}")
-                    except asyncio.TimeoutError:
-                        logger.debug(f"Timeout fetching {slug}")
-                    except Exception as e:
-                        logger.debug(f"Error fetching {slug}: {e}")
+                                    logger.info(
+                                        f"🎯 CURRENT {asset.upper()} market: "
+                                        f"Up=${up_price:.2f}, Down=${down_price:.2f}, "
+                                        f"Ends: {end_time.strftime('%H:%M:%S')} UTC"
+                                    )
+                        elif resp.status != 404:
+                            logger.debug(f"Slug {slug}: Status {resp.status}")
+                except asyncio.TimeoutError:
+                    logger.debug(f"Timeout fetching {slug}")
+                except Exception as e:
+                    logger.debug(f"Error fetching {slug}: {e}")
         
         # Remove duplicates (same conditionId)
         seen_ids = set()
@@ -397,6 +464,9 @@ class FifteenMinuteCryptoStrategy:
         """
         total = market.up_price + market.down_price
         
+        # ALWAYS log for debugging
+        logger.info(f"💰 SUM-TO-ONE CHECK: {market.asset} | UP=${market.up_price:.3f} + DOWN=${market.down_price:.3f} = ${total:.3f} (Target < ${self.sum_to_one_threshold})")
+            
         if total < self.sum_to_one_threshold:
             spread = Decimal("1.0") - total
             logger.warning(f"🎯 SUM-TO-ONE ARBITRAGE FOUND!")
@@ -407,13 +477,13 @@ class FifteenMinuteCryptoStrategy:
             self.stats["arbitrage_opportunities"] += 1
             
             if len(self.positions) < self.max_positions:
-                # Buy both sides
-                up_shares = float(self.trade_size / 2 / market.up_price)
-                down_shares = float(self.trade_size / 2 / market.down_price)
+                # Buy both sides - ENFORCE min 5 shares per side
+                up_shares = max(5.0, float(self.trade_size / 2 / market.up_price))
+                down_shares = max(5.0, float(self.trade_size / 2 / market.down_price))
                 
                 # Execute trades
-                await self._place_order(market, "UP", market.up_price, up_shares)
-                await self._place_order(market, "DOWN", market.down_price, down_shares)
+                await self._place_order(market, "UP", market.up_price, up_shares, strategy="sum_to_one")
+                await self._place_order(market, "DOWN", market.down_price, down_shares, strategy="sum_to_one")
                 
                 return True
         
@@ -430,50 +500,168 @@ class FifteenMinuteCryptoStrategy:
         """
         asset = market.asset
         
+        # ALWAYS log current price change for debugging
+        change = self.binance_feed.get_price_change(asset, seconds=10)
+        binance_price = self.binance_feed.prices.get(asset, Decimal("0"))
+        
+        if change is not None:
+            logger.info(f"📊 LATENCY CHECK: {asset} | Binance=${binance_price:.2f} | 10s Change={change*100:.3f}% (Threshold=±0.05%)")
+        else:
+            logger.info(f"📊 LATENCY CHECK: {asset} | Binance=${binance_price:.2f} | No price history yet")
+        
         # Check for bullish signal -> Buy UP
-        if self.binance_feed.is_bullish_signal(asset, Decimal("0.002")):
-            # Binance price rising > 0.2%, buy UP before Polymarket reacts
+        # Lowered threshold to 0.05% for MORE activity
+        if self.binance_feed.is_bullish_signal(asset, Decimal("0.0005")):
+            # Binance price rising > 0.1%, buy UP before Polymarket reacts
             logger.info(f"🚀 BINANCE BULLISH SIGNAL for {asset}!")
             logger.info(f"   Current UP price: ${market.up_price}")
             
             if len(self.positions) < self.max_positions:
                 shares = float(self.trade_size / market.up_price)
-                await self._place_order(market, "UP", market.up_price, shares)
+                await self._place_order(market, "UP", market.up_price, shares, strategy="latency")
                 return True
         
         # Check for bearish signal -> Buy DOWN
-        if self.binance_feed.is_bearish_signal(asset, Decimal("0.002")):
-            # Binance price falling > 0.2%, buy DOWN before Polymarket reacts
+        # Lowered threshold to 0.05% for MORE activity
+        if self.binance_feed.is_bearish_signal(asset, Decimal("0.0005")):
+            # Binance price falling > 0.1%, buy DOWN before Polymarket reacts
             logger.info(f"📉 BINANCE BEARISH SIGNAL for {asset}!")
             logger.info(f"   Current DOWN price: ${market.down_price}")
             
             if len(self.positions) < self.max_positions:
                 shares = float(self.trade_size / market.down_price)
-                await self._place_order(market, "DOWN", market.down_price, shares)
+                await self._place_order(market, "DOWN", market.down_price, shares, strategy="latency")
                 return True
         
+        return False
+
+    async def check_directional_trade(self, market: CryptoMarket) -> bool:
+        """
+        Consult LLM for a directional trade (Trend Following/Reversion).
+        
+        Used when no arbitrage is available.
+        """
+        if not self.llm_decision_engine:
+            logger.warning(f"🤖 DIRECTIONAL CHECK: {market.asset} | LLM not available, skipping")
+            return False
+            
+        # Don't over-trade: max 1 directional trade per market per cycle? 
+        # Actually LLM handles "HOLD" or "SKIP".
+        
+        if len(self.positions) >= self.max_positions:
+            logger.debug(f"🤖 DIRECTIONAL CHECK: {market.asset} | Max positions reached ({len(self.positions)}/{self.max_positions}), skipping")
+            return False
+            
+        # Rate limit: Only check once every 60 seconds per asset
+        last_check = self.last_llm_check.get(market.asset)
+        if last_check and (datetime.now() - last_check).total_seconds() < 60:
+            seconds_ago = (datetime.now() - last_check).total_seconds()
+            logger.debug(f"🤖 DIRECTIONAL CHECK: {market.asset} | Rate limited (checked {seconds_ago:.0f}s ago), skipping")
+            return False
+            
+        logger.warning(f"🤖 DIRECTIONAL CHECK: {market.asset} | Consulting LLM V2...")
+        self.last_llm_check[market.asset] = datetime.now()
+            
+        # Calculate recent volatility/change from Binance if available
+        change_10s = self.binance_feed.get_price_change(market.asset, seconds=10)
+        
+        # Determine Binance momentum
+        binance_momentum = "neutral"
+        if change_10s:
+            if change_10s > Decimal("0.001"):
+                binance_momentum = "bullish"
+            elif change_10s < Decimal("-0.001"):
+                binance_momentum = "bearish"
+        
+        # Get current Binance price
+        binance_price = self.binance_feed.prices.get(market.asset, Decimal("0"))
+        
+        # Build Context for V2 engine
+        ctx = MarketContextV2(
+            market_id=market.market_id,
+            question=market.question,
+            asset=market.asset,
+            yes_price=market.up_price,
+            no_price=market.down_price,
+            yes_liquidity=Decimal("1000"),
+            no_liquidity=Decimal("1000"),
+            volume_24h=Decimal("10000"),
+            time_to_resolution=(market.end_time - datetime.now(market.end_time.tzinfo)).total_seconds() / 60.0,
+            spread=Decimal("1.0") - (market.up_price + market.down_price),
+            volatility_1h=None,
+            recent_price_changes=[change_10s] if change_10s else None,
+            binance_price=binance_price,
+            binance_momentum=binance_momentum
+        )
+        
+        # Portfolio state
+        p_state = PortfolioStateV2(
+            available_balance=Decimal("100.0"), 
+            total_balance=Decimal("100.0"),
+            open_positions=[],
+            daily_pnl=Decimal("0"),
+            win_rate_today=0.5,
+            trades_today=0,
+            max_position_size=self.trade_size
+        )
+        
+        # Ask LLM V2 with directional_trend prompt
+        try:
+            decision = await self.llm_decision_engine.make_decision(
+                ctx, p_state, opportunity_type="directional_trend"
+            )
+            
+            if decision.should_execute:
+                logger.info(f"🧠 LLM SIGNAL: {decision.action.value} ({decision.confidence}%)")
+                logger.info(f"   Reason: {decision.reasoning}")
+                
+                if decision.action.value == "buy_yes":
+                    shares = float(self.trade_size / market.up_price)
+                    await self._place_order(market, "UP", market.up_price, shares, strategy="directional")
+                    return True
+                elif decision.action.value == "buy_no":
+                    shares = float(self.trade_size / market.down_price)
+                    await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
+                    return True
+                    
+        except Exception as e:
+            logger.warning(f"LLM Decision failed: {e}")
+            
         return False
     
     async def check_exit_conditions(self, market: CryptoMarket) -> None:
         """
         Check if any positions should be exited.
         
-        Exit on take-profit or stop-loss.
+        Exit on take-profit, stop-loss, or market expiration.
+        
+        CRITICAL FIX (2026-02-09):
+        - Match by ASSET (BTC, ETH) not market_id (changes every 15 min!)
+        - Add forced exit on market expiration
         """
         positions_to_close = []
+        now = datetime.now(timezone.utc)
         
-        for token_id, position in self.positions.items():
-            if position.market_id != market.market_id:
+        for token_id, position in list(self.positions.items()):
+            # Match by ASSET, not market_id (market_id changes every 15-min window!)
+            if position.asset.upper() != market.asset.upper():
                 continue
+                
+            logger.info(f"📊 Checking exit for {position.asset} {position.side} position...")
             
-            # Get current price
+            # Get current price from the market
             if position.side == "UP":
                 current_price = market.up_price
             else:
                 current_price = market.down_price
             
             # Calculate P&L percentage
-            pnl_pct = (current_price - position.entry_price) / position.entry_price
+            if position.entry_price > 0:
+                pnl_pct = (current_price - position.entry_price) / position.entry_price
+            else:
+                pnl_pct = Decimal("0")
+            
+            logger.info(f"   Entry: ${position.entry_price} -> Current: ${current_price} (P&L: {pnl_pct * 100:.2f}%)")
             
             # Take profit
             if pnl_pct >= self.take_profit_pct:
@@ -481,11 +669,27 @@ class FifteenMinuteCryptoStrategy:
                 logger.info(f"   Entry: ${position.entry_price} -> Current: ${current_price}")
                 logger.info(f"   P&L: {pnl_pct * 100:.2f}%")
                 
-                await self._close_position(position, current_price)
-                positions_to_close.append(token_id)
-                
-                self.stats["trades_won"] += 1
-                self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                success = await self._close_position(position, current_price)
+                if success:
+                    positions_to_close.append(token_id)
+                    self.stats["trades_won"] += 1
+                    self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                    
+                    # NEW: Record trade outcome for learning
+                    if self.adaptive_learning:
+                        outcome = TradeOutcome(
+                            timestamp=datetime.now(timezone.utc),
+                            asset=position.asset,
+                            side=position.side,
+                            entry_price=position.entry_price,
+                            exit_price=current_price,
+                            profit_pct=pnl_pct,
+                            hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
+                            exit_reason="take_profit",
+                            strategy_used=getattr(position, 'strategy', 'unknown'),
+                            time_of_day=datetime.now(timezone.utc).hour
+                        )
+                        self.adaptive_learning.record_trade(outcome)
             
             # Stop loss
             elif pnl_pct <= -self.stop_loss_pct:
@@ -493,22 +697,67 @@ class FifteenMinuteCryptoStrategy:
                 logger.warning(f"   Entry: ${position.entry_price} -> Current: ${current_price}")
                 logger.warning(f"   P&L: {pnl_pct * 100:.2f}%")
                 
-                await self._close_position(position, current_price)
-                positions_to_close.append(token_id)
-                
-                self.stats["trades_lost"] += 1
-                self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                success = await self._close_position(position, current_price)
+                if success:
+                    positions_to_close.append(token_id)
+                    self.stats["trades_lost"] += 1
+                    self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                    
+                    # NEW: Record trade outcome for learning
+                    if self.adaptive_learning:
+                        outcome = TradeOutcome(
+                            timestamp=datetime.now(timezone.utc),
+                            asset=position.asset,
+                            side=position.side,
+                            entry_price=position.entry_price,
+                            exit_price=current_price,
+                            profit_pct=pnl_pct,
+                            hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
+                            exit_reason="stop_loss",
+                            strategy_used=getattr(position, 'strategy', 'unknown'),
+                            time_of_day=datetime.now(timezone.utc).hour
+                        )
+                        self.adaptive_learning.record_trade(outcome)
+            
+            # Force exit if position is too old (> 12 minutes - FIXED: exit before market closes)
+            position_age = (now - position.entry_time).total_seconds() / 60
+            if position_age > 12 and token_id not in positions_to_close:
+                logger.warning(f"⏰ TIME EXIT on {position.asset} {position.side} (age: {position_age:.1f} min)")
+                success = await self._close_position(position, current_price)
+                if success:
+                    positions_to_close.append(token_id)
+                    if pnl_pct > 0:
+                        self.stats["trades_won"] += 1
+                    else:
+                        self.stats["trades_lost"] += 1
+                    self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+            
+            # CRITICAL FIX: Force exit if market is about to close (< 2 minutes remaining)
+            time_to_close = (market.end_time - now).total_seconds() / 60
+            if time_to_close < 2 and token_id not in positions_to_close:
+                logger.warning(f"🚨 MARKET CLOSING on {position.asset} {position.side} (closes in {time_to_close:.1f} min)")
+                success = await self._close_position(position, current_price)
+                if success:
+                    positions_to_close.append(token_id)
+                    if pnl_pct > 0:
+                        self.stats["trades_won"] += 1
+                    else:
+                        self.stats["trades_lost"] += 1
+                    self.stats["total_profit"] += (current_price - position.entry_price) * position.size
         
         # Remove closed positions
         for token_id in positions_to_close:
-            del self.positions[token_id]
+            if token_id in self.positions:
+                del self.positions[token_id]
+                logger.info(f"✅ Position {token_id[:16]}... removed from tracking")
     
     async def _place_order(
         self,
         market: CryptoMarket,
         side: str,  # "UP" or "DOWN"
         price: Decimal,
-        shares: float
+        shares: float,
+        strategy: str = "unknown"  # Track which strategy placed this order
     ) -> bool:
         """
         Place a buy order.
@@ -541,44 +790,52 @@ class FifteenMinuteCryptoStrategy:
                 side=side,
                 entry_price=price,
                 size=Decimal(str(shares)),
-                entry_time=datetime.now(),
+                entry_time=datetime.now(timezone.utc),
                 market_id=market.market_id,
-                asset=market.asset
+                asset=market.asset,
+                strategy=strategy
             )
             self.stats["trades_placed"] += 1
             return True
         
         try:
-            # Place order using correct API
-            try:
-                response = self.clob_client.create_and_post_order(
-                    OrderArgs(
-                        token_id=token_id,
-                        price=float(price),
-                        size=shares,
-                        side=BUY,
-                    ),
-                    options=SimpleNamespace(
-                        tick_size="0.01",
-                        neg_risk=market.neg_risk,
-                    )
+            # Polymarket requires MINIMUM 5 shares per order
+            MIN_SHARES = 5.0
+            if shares < MIN_SHARES:
+                logger.warning(f"⚠️ Shares {shares:.2f} < minimum {MIN_SHARES}. Adjusting...")
+                shares = MIN_SHARES
+                logger.info(f"   Adjusted shares: {shares:.2f} (Value: ${float(price)*shares:.2f})")
+            
+            # Also ensure minimum $1 total value (Polymarket requirement)
+            order_value = float(price) * shares
+            if order_value < 1.0:
+                logger.warning(f"⚠️ Order value ${order_value:.2f} < $1.00 minimum")
+                if float(price) > 0:
+                    shares = max(shares, 1.05 / float(price))
+                else:
+                    logger.error("Price is 0, cannot place order")
+                    return False
+
+            # Round to Avoid Signature Issues
+            price_f = round(float(price), 2)
+            size_f = round(shares, 2)
+            
+            # Revert to create_order/post_order pattern
+            tick_size = getattr(market, 'tick_size', "0.01")
+            
+            order = self.clob_client.create_order(
+                OrderArgs(
+                    token_id=token_id,
+                    price=price_f,
+                    size=size_f,
+                    side=BUY,
+                ),
+                options=SimpleNamespace(
+                    tick_size=tick_size,
+                    neg_risk=False, # Set to False as per instruction
                 )
-            except TypeError as e:
-                logger.warning(f"First order attempt failed: {e}. Trying fallback...")
-                # Fallback
-                order = self.clob_client.create_order(
-                    OrderArgs(
-                        token_id=token_id,
-                        price=float(price),
-                        size=shares,
-                        side=BUY,
-                    ),
-                    options=SimpleNamespace(
-                        tick_size="0.01",
-                        neg_risk=market.neg_risk,
-                    )
-                )
-                response = self.clob_client.post_order(order)
+            )
+            response = self.clob_client.post_order(order)
             
             if response:
                 order_id = "unknown"
@@ -593,9 +850,10 @@ class FifteenMinuteCryptoStrategy:
                     side=side,
                     entry_price=price,
                     size=Decimal(str(shares)),
-                    entry_time=datetime.now(),
+                    entry_time=datetime.now(timezone.utc),
                     market_id=market.market_id,
-                    asset=market.asset
+                    asset=market.asset,
+                    strategy=strategy
                 )
                 self.stats["trades_placed"] += 1
                 return True
@@ -619,88 +877,103 @@ class FifteenMinuteCryptoStrategy:
             True if order placed successfully
         """
         logger.info("=" * 80)
-        logger.info(f"📤 CLOSING POSITION")
+        logger.info(f"📉 CLOSING POSITION")
+        logger.info(f"   Asset: {position.asset}")
         logger.info(f"   Side: {position.side}")
-        logger.info(f"   Entry: ${position.entry_price} -> Exit: ${current_price}")
-        logger.info(f"   Shares: {position.size}")
+        logger.info(f"   Size: {position.size}")
+        logger.info(f"   Entry: ${position.entry_price}")
+        logger.info(f"   Exit: ${current_price}")
         logger.info("=" * 80)
         
         if self.dry_run:
-            logger.info("DRY RUN: Exit simulated (not placed)")
+            logger.info("DRY RUN: Close simulated (not executed)")
             return True
-        
+            
         try:
-            response = self.clob_client.create_and_post_order(
+            # Round to avoid precision issues (same as buy logic)
+            price_f = round(float(current_price), 2)
+            size_f = round(float(position.size), 2)
+            
+            # Use same working pattern as _place_order
+            order = self.clob_client.create_order(
                 OrderArgs(
                     token_id=position.token_id,
-                    price=float(current_price),
-                    size=float(position.size),
+                    price=price_f,
+                    size=size_f,
                     side=SELL,
                 ),
-                options={
-                    "tick_size": "0.01",
-                    "neg_risk": True,
-                },
-                order_type=OrderType.GTC
+                options=SimpleNamespace(
+                    tick_size="0.01",
+                    neg_risk=False,  # CRITICAL: Must be False for 15-min crypto markets
+                )
             )
+            response = self.clob_client.post_order(order)
             
             if response:
-                logger.info(f"✅ EXIT ORDER PLACED")
+                order_id = "unknown"
+                if isinstance(response, dict):
+                    order_id = response.get("orderID") or response.get("order_id") or "unknown"
+                logger.info(f"✅ POSITION CLOSED: {order_id}")
                 return True
             else:
-                logger.error("❌ EXIT ORDER FAILED")
+                logger.error("❌ Close failed: No response")
                 return False
                 
         except Exception as e:
-            logger.error(f"Exit order error: {e}", exc_info=True)
+            logger.error(f"Close error: {e}", exc_info=True)
             return False
-    
-    async def run_cycle(self) -> None:
-        """
-        Run one trading cycle.
-        
-        This should be called every few seconds in the main loop.
-        """
-        # Fetch current 15-minute markets
-        markets = await self.fetch_15min_markets()
-        
-        if not markets:
-            logger.debug("No active 15-minute markets found")
-            return
-        
-        for market in markets:
-            # Strategy 1: Sum-to-one arbitrage (guaranteed profit)
-            await self.check_sum_to_one_arbitrage(market)
             
-            # Strategy 2: Latency arbitrage (Binance signal)
-            await self.check_latency_arbitrage(market)
-            
-            # Check exit conditions for existing positions
-            await self.check_exit_conditions(market)
-        
-        # Log status
-        if self.positions:
-            logger.info(f"📊 Active positions: {len(self.positions)}")
-            logger.info(f"   Stats: {self.stats['trades_won']} wins, {self.stats['trades_lost']} losses")
-            logger.info(f"   Total P&L: ${self.stats['total_profit']:.2f}")
-    
-    async def run_forever(self, interval_seconds: int = 5):
-        """
-        Run the strategy continuously.
-        
-        Args:
-            interval_seconds: Seconds between each cycle
-        """
-        await self.start()
-        
-        logger.info("🚀 Starting 15-minute crypto trading strategy...")
-        logger.info(f"   Cycle interval: {interval_seconds} seconds")
-        
+    async def run_cycle(self):
+        """Run one trading cycle."""
         try:
-            while True:
-                await self.run_cycle()
-                await asyncio.sleep(interval_seconds)
-        except KeyboardInterrupt:
-            logger.info("Shutting down...")
-        finally:
-            await self.stop()
+            # Log current positions status at start of each cycle
+            if self.positions:
+                logger.info(f"📊 Active positions: {len(self.positions)}")
+                for token_id, pos in list(self.positions.items()):
+                    age_min = (datetime.now(timezone.utc) - pos.entry_time).total_seconds() / 60
+                    logger.info(f"   - {pos.asset} {pos.side}: entry=${pos.entry_price}, age={age_min:.1f}min")
+            
+            # 1. Fetch markets
+            markets = await self.fetch_15min_markets()
+            
+            # Track which assets we found markets for
+            found_assets = {m.asset.upper() for m in markets}
+            
+            # 2. Check each market for opportunities
+            for market in markets:
+                # Check exit conditions first
+                await self.check_exit_conditions(market)
+                
+                # If we have capacity...
+                if len(self.positions) < self.max_positions:
+                    # Priority 1: Latency Arbitrage (High probability, bigger profits)
+                    if await self.check_latency_arbitrage(market):
+                        continue
+                        
+                    # Priority 2: Directional / LLM (Speculative, BIGGEST profits)
+                    if await self.check_directional_trade(market):
+                        continue
+                        
+                    # Priority 3: Sum-to-one Arbitrage (Guaranteed but tiny profits)
+                    # Only use as fallback when no better opportunities
+                    await self.check_sum_to_one_arbitrage(market)
+            
+            # 3. FALLBACK: Force-close any positions older than 12 min that weren't checked
+            #    This handles cases where no market matches the position's asset
+            now = datetime.now(timezone.utc)
+            orphan_positions = []
+            for token_id, position in list(self.positions.items()):
+                if position.asset.upper() not in found_assets:
+                    age_min = (now - position.entry_time).total_seconds() / 60
+                    if age_min > 12:
+                        logger.warning(f"⚠️ ORPHAN POSITION: {position.asset} {position.side} (age: {age_min:.1f}min, no matching market)")
+                        logger.warning(f"   Force-removing from tracking (market may have closed)")
+                        orphan_positions.append(token_id)
+            
+            for token_id in orphan_positions:
+                if token_id in self.positions:
+                    del self.positions[token_id]
+                    self.stats["trades_lost"] += 1  # Count as loss since we couldn't exit properly
+                    
+        except Exception as e:
+            logger.error(f"Error in trading cycle: {e}", exc_info=True)

@@ -74,6 +74,7 @@ NO Liquidity: ${self.no_liquidity:.2f}
 24h Volume: ${self.volume_24h:.2f}
 Time to Resolution: {self.time_to_resolution:.1f} minutes
 1h Volatility: {f'{self.volatility_1h*100:.2f}%' if self.volatility_1h else 'N/A'}
+Recent Price Changes (10s): {self.recent_price_changes if self.recent_price_changes else 'N/A'}
 """
 
 
@@ -173,7 +174,7 @@ Always respond with valid JSON only."""
         self,
         nvidia_api_key: str,
         nvidia_api_url: str = "https://integrate.api.nvidia.com/v1",
-        min_confidence_threshold: float = 70.0,
+        min_confidence_threshold: float = 60.0,  # Lowered from 70% for more trades
         max_position_pct: float = 5.0,
         decision_timeout: float = 5.0,
         enable_chain_of_thought: bool = True
@@ -273,7 +274,7 @@ Always respond with valid JSON only."""
         try:
             # Make API call
             completion = self.client.chat.completions.create(
-                model="deepseek-ai/deepseek-v3.2",
+                model="meta/llama-3.3-70b-instruct",
                 messages=[
                     {"role": "system", "content": self.TRADING_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt}
