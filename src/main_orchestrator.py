@@ -605,7 +605,7 @@ class MainOrchestrator:
         
         return health_status
     
-    def _check_gas_price(self) -> bool:
+    async def _check_gas_price(self) -> bool:
         """
         Check if gas price is acceptable for trading.
         
@@ -624,11 +624,11 @@ class MainOrchestrator:
                         f"Gas price too high: {gas_price_gwei} gwei "
                         f"(max: {self.config.max_gas_price_gwei}). Halting trading."
                     )
-                    # Monitoring system doesn't have send_alert
-                    # self.monitoring.send_alert(
-                    #     "warning",
-                    #     f"Trading halted: Gas price {gas_price_gwei} gwei exceeds limit"
-                    # )
+                    # FIX: Re-enabled monitoring alert (send_alert exists in MonitoringSystem)
+                    await self.monitoring.send_alert(
+                        "warning",
+                        f"Trading halted: Gas price {gas_price_gwei} gwei exceeds limit"
+                    )
                     self.gas_price_halted = True
                 return False
             else:
@@ -636,11 +636,11 @@ class MainOrchestrator:
                     logger.info(
                         f"Gas price normalized: {gas_price_gwei} gwei. Resuming trading."
                     )
-                    # Monitoring system doesn't have send_alert
-                    # self.monitoring.send_alert(
-                    #     "info",
-                    #     f"Trading resumed: Gas price {gas_price_gwei} gwei"
-                    # )
+                    # FIX: Re-enabled monitoring alert
+                    await self.monitoring.send_alert(
+                        "info",
+                        f"Trading resumed: Gas price {gas_price_gwei} gwei"
+                    )
                     self.gas_price_halted = False
                 return True
                 
@@ -703,107 +703,107 @@ class MainOrchestrator:
                 logger.debug("💾 Using cached market data")
                 raw_markets = self._market_cache
             else:
-                # Fetch markets from Gamma API (active markets only)
+                # FIX: All fetch logic now properly inside else block (was bypassing cache)
                 logger.debug("🔄 Fetching fresh market data from Gamma API...")
-            
-            import requests
-            import json
-            gamma_url = "https://gamma-api.polymarket.com/markets"
-            params = {
-                'closed': 'false',  # Only active markets
-                'limit': 100,
-                'offset': 0
-            }
-            
-            try:
-                response = requests.get(gamma_url, params=params, timeout=10)
-                response.raise_for_status()
-                gamma_markets = response.json()
                 
-                if not isinstance(gamma_markets, list):
-                    gamma_markets = gamma_markets.get('data', [])
+                import requests
+                import json
+                gamma_url = "https://gamma-api.polymarket.com/markets"
+                params = {
+                    'closed': 'false',  # Only active markets
+                    'limit': 100,
+                    'offset': 0
+                }
                 
-                logger.info(f"Fetched {len(gamma_markets)} active markets from Gamma API")
-                
-                # Convert Gamma API format to CLOB API format
-                raw_markets = []
-                for gm in gamma_markets:
-                    # Skip if no conditionId
-                    condition_id = gm.get('conditionId', '')
-                    if not condition_id:
-                        logger.debug(f"Skipping market without conditionId")
-                        continue
+                try:
+                    response = requests.get(gamma_url, params=params, timeout=10)
+                    response.raise_for_status()
+                    gamma_markets = response.json()
                     
-                    # Parse outcomes and prices (Gamma returns JSON strings)
-                    try:
-                        outcomes_raw = gm.get('outcomes', '[]')
-                        prices_raw = gm.get('outcomePrices', '[]')
-                        token_ids_raw = gm.get('clobTokenIds', '[]')
+                    if not isinstance(gamma_markets, list):
+                        gamma_markets = gamma_markets.get('data', [])
+                    
+                    logger.info(f"Fetched {len(gamma_markets)} active markets from Gamma API")
+                    
+                    # Convert Gamma API format to CLOB API format
+                    raw_markets = []
+                    for gm in gamma_markets:
+                        # Skip if no conditionId
+                        condition_id = gm.get('conditionId', '')
+                        if not condition_id:
+                            logger.debug(f"Skipping market without conditionId")
+                            continue
                         
-                        # Parse JSON strings
-                        outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
-                        prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
-                        token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
-                        
-                        # Ensure we have lists
-                        if not isinstance(outcomes, list):
+                        # Parse outcomes and prices (Gamma returns JSON strings)
+                        try:
+                            outcomes_raw = gm.get('outcomes', '[]')
+                            prices_raw = gm.get('outcomePrices', '[]')
+                            token_ids_raw = gm.get('clobTokenIds', '[]')
+                            
+                            # Parse JSON strings
+                            outcomes = json.loads(outcomes_raw) if isinstance(outcomes_raw, str) else outcomes_raw
+                            prices = json.loads(prices_raw) if isinstance(prices_raw, str) else prices_raw
+                            token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
+                            
+                            # Ensure we have lists
+                            if not isinstance(outcomes, list):
+                                outcomes = []
+                            if not isinstance(prices, list):
+                                prices = []
+                            if not isinstance(token_ids, list):
+                                token_ids = []
+                            
+                        except Exception as e:
+                            logger.debug(f"Failed to parse market {condition_id} data: {e}")
                             outcomes = []
-                        if not isinstance(prices, list):
                             prices = []
-                        if not isinstance(token_ids, list):
                             token_ids = []
                         
-                    except Exception as e:
-                        logger.debug(f"Failed to parse market {condition_id} data: {e}")
-                        outcomes = []
-                        prices = []
-                        token_ids = []
-                    
-                    # Skip if no outcomes
-                    if len(outcomes) < 2:
-                        logger.debug(f"Skipping market {condition_id} - insufficient outcomes")
-                        continue
-                    
-                    # Build tokens array
-                    tokens = []
-                    for i, outcome in enumerate(outcomes):
-                        token_data = {
-                            'outcome': outcome,
-                            'price': float(prices[i]) if i < len(prices) else 0.0,
-                            'token_id': str(token_ids[i]) if i < len(token_ids) else ''
+                        # Skip if no outcomes
+                        if len(outcomes) < 2:
+                            logger.debug(f"Skipping market {condition_id} - insufficient outcomes")
+                            continue
+                        
+                        # Build tokens array
+                        tokens = []
+                        for i, outcome in enumerate(outcomes):
+                            token_data = {
+                                'outcome': outcome,
+                                'price': float(prices[i]) if i < len(prices) else 0.0,
+                                'token_id': str(token_ids[i]) if i < len(token_ids) else ''
+                            }
+                            tokens.append(token_data)
+                        
+                        # Convert to CLOB format with all required fields
+                        clob_market = {
+                            'condition_id': condition_id,
+                            'question': gm.get('question', ''),
+                            'end_date_iso': gm.get('endDate', ''),
+                            'closed': gm.get('closed', False),
+                            'accepting_orders': gm.get('acceptingOrders', True),  # Default to True
+                            'tokens': tokens,
+                            'volume': float(gm.get('volume', 0)),
+                            'liquidity': float(gm.get('liquidity', 0)),
+                            'resolution_source': gm.get('resolutionSource', '')
                         }
-                        tokens.append(token_data)
+                        raw_markets.append(clob_market)
                     
-                    # Convert to CLOB format with all required fields
-                    clob_market = {
-                        'condition_id': condition_id,
-                        'question': gm.get('question', ''),
-                        'end_date_iso': gm.get('endDate', ''),
-                        'closed': gm.get('closed', False),
-                        'accepting_orders': gm.get('acceptingOrders', True),  # Default to True
-                        'tokens': tokens,
-                        'volume': float(gm.get('volume', 0)),
-                        'liquidity': float(gm.get('liquidity', 0)),
-                        'resolution_source': gm.get('resolutionSource', '')
-                    }
-                    raw_markets.append(clob_market)
-                
-                logger.info(f"Converted {len(raw_markets)} markets from Gamma API format")
-                
-                # OPTIMIZATION: Update cache
-                self._market_cache = raw_markets
-                self._market_cache_time = current_time
-                
-            except Exception as e:
-                logger.error(f"Failed to fetch from Gamma API: {e}")
-                # Fallback to CLOB API
-                logger.info("Falling back to CLOB API...")
-                markets_response = self.clob_client.get_markets()
-                raw_markets = markets_response.get('data', []) if isinstance(markets_response, dict) else markets_response
-                
-                # Update cache with fallback data
-                self._market_cache = raw_markets
-                self._market_cache_time = current_time
+                    logger.info(f"Converted {len(raw_markets)} markets from Gamma API format")
+                    
+                    # OPTIMIZATION: Update cache
+                    self._market_cache = raw_markets
+                    self._market_cache_time = current_time
+                    
+                except Exception as e:
+                    logger.error(f"Failed to fetch from Gamma API: {e}")
+                    # Fallback to CLOB API
+                    logger.info("Falling back to CLOB API...")
+                    markets_response = self.clob_client.get_markets()
+                    raw_markets = markets_response.get('data', []) if isinstance(markets_response, dict) else markets_response
+                    
+                    # Update cache with fallback data
+                    self._market_cache = raw_markets
+                    self._market_cache_time = current_time
             
             # Parse markets - NO FILTERING for maximum opportunity coverage
             markets = []
@@ -821,11 +821,12 @@ class MainOrchestrator:
                 logger.warning("  2. API is returning stale data")
                 logger.warning("  3. Polymarket has very few active markets right now")
                 return
-            # Monitoring system doesn't have record_markets_scanned
-            # self.monitoring.record_markets_scanned(len(markets))
-            
-            # Dashboard update not needed - passive display
-            # self.dashboard.update_scan_info(len(raw_markets), len(markets))
+            # FIX: Re-enabled monitoring — update_system_metrics covers markets_scanned
+            self.monitoring.update_system_metrics(
+                markets_scanned=len(markets),
+                circuit_breaker_open=self.circuit_breaker.is_open,
+                consecutive_failures=self.circuit_breaker.consecutive_failures
+            )
             
             # OPTIMIZATION: Adjust scan interval based on volatility
             self._adjust_scan_interval(markets)
@@ -848,10 +849,8 @@ class MainOrchestrator:
                 logger.info("⏱️ Running 15-Minute Crypto Strategy...")
                 strategy_tasks.append(self.fifteen_min_strategy.run_cycle())
             
-            # PRIORITY 3: NegRisk Arbitrage (run in parallel too)
-            if self.negrisk_arbitrage:
-                logger.info("🎯 Running NegRisk Arbitrage...")
-                strategy_tasks.append(self.negrisk_arbitrage.scan_opportunities())
+            # FIX: NegRisk removed from parallel block — it runs sequentially below
+            # with full LLM evaluation and portfolio risk checks (lines 879-956)
             
             # Execute all strategies concurrently for 3x speed improvement
             if strategy_tasks:
@@ -863,11 +862,8 @@ class MainOrchestrator:
                     if isinstance(result, Exception):
                         logger.error(f"Strategy {i} failed: {result}")
                     elif result and isinstance(result, list):
-                        # NegRisk returns opportunities
-                        if i == 2 and self.negrisk_arbitrage:  # NegRisk is 3rd task
-                            negrisk_opps = result
-                            if negrisk_opps:
-                                logger.info(f"✅ Found {len(negrisk_opps)} NegRisk opportunities")
+                        # Strategy returned results
+                        logger.debug(f"Strategy {i} returned {len(result)} results")
             
             # PRIORITY 3: Internal arbitrage (DISABLED - Polymarket too efficient)
             # internal_opps = await self.internal_arbitrage.scan_opportunities(markets)
@@ -1233,8 +1229,8 @@ class MainOrchestrator:
             logger.info("Keyboard interrupt received")
         except Exception as e:
             logger.critical(f"Fatal error in main loop: {e}", exc_info=True)
-            # Monitoring system doesn't have send_alert
-            # self.monitoring.send_alert("critical", f"Fatal error: {e}")
+            # FIX: Re-enabled monitoring alert
+            await self.monitoring.send_alert("critical", f"Fatal error: {e}")
         finally:
             await self.shutdown()
     

@@ -49,18 +49,30 @@ def create_test_fund_manager(dry_run=False):
     return fund_manager
 
 
+def _setup_balance_mocks(fund_manager, eoa_raw, polymarket_usdc):
+    """
+    Helper to mock both balance sources.
+    
+    Args:
+        fund_manager: FundManager instance
+        eoa_raw: Raw USDC balance in smallest units (6 decimals)
+        polymarket_usdc: Polymarket balance as Decimal (already in USDC units)
+    """
+    # Mock EOA balance (usdc_contract.functions.balanceOf)
+    fund_manager.usdc_contract.functions.balanceOf = Mock(
+        return_value=Mock(call=Mock(return_value=eoa_raw))
+    )
+    # Mock Polymarket balance (replaces old ctf_exchange mock)
+    fund_manager._get_polymarket_balance_from_api = AsyncMock(return_value=polymarket_usdc)
+
+
 @pytest.mark.asyncio
 async def test_check_balance_success():
     """Test successful balance check."""
     fund_manager = create_test_fund_manager()
     
-    # Mock contract calls
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=100_000_000))  # 100 USDC
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=50_000_000))  # 50 USDC
-    )
+    # Mock balance sources
+    _setup_balance_mocks(fund_manager, 100_000_000, Decimal("50.0"))  # EOA=100, Poly=50
     
     eoa_balance, proxy_balance = await fund_manager.check_balance()
     
@@ -74,12 +86,7 @@ async def test_auto_deposit_dry_run():
     fund_manager = create_test_fund_manager(dry_run=True)
     
     # Mock balances: EOA=200, Proxy=30 (below minimum)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=200_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=30_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 200_000_000, Decimal("30.0"))
     
     result = await fund_manager.auto_deposit()
     
@@ -93,12 +100,7 @@ async def test_auto_deposit_insufficient_balance():
     fund_manager = create_test_fund_manager(dry_run=False)
     
     # Mock balances: EOA=20, Proxy=30 (need 70 to reach target 100)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=20_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=30_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 20_000_000, Decimal("30.0"))
     
     with pytest.raises(InsufficientBalanceError) as exc_info:
         await fund_manager.auto_deposit()
@@ -112,12 +114,7 @@ async def test_auto_deposit_no_deposit_needed():
     fund_manager = create_test_fund_manager()
     
     # Mock balances: EOA=200, Proxy=150 (above target)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=200_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=150_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 200_000_000, Decimal("150.0"))
     
     result = await fund_manager.auto_deposit()
     
@@ -131,12 +128,7 @@ async def test_auto_withdraw_dry_run():
     fund_manager = create_test_fund_manager(dry_run=True)
     
     # Mock balances: EOA=100, Proxy=600 (above withdrawal limit)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=100_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=600_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 100_000_000, Decimal("600.0"))
     
     result = await fund_manager.auto_withdraw()
     
@@ -150,12 +142,7 @@ async def test_auto_withdraw_no_withdrawal_needed():
     fund_manager = create_test_fund_manager()
     
     # Mock balances: EOA=100, Proxy=100 (at target, no withdrawal needed)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=100_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=100_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 100_000_000, Decimal("100.0"))
     
     result = await fund_manager.auto_withdraw()
     
@@ -203,12 +190,7 @@ async def test_cross_chain_deposit_polygon_usdc_direct():
     fund_manager = create_test_fund_manager(dry_run=False)
     
     # Mock balances
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=200_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=30_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 200_000_000, Decimal("30.0"))
     
     # Mock auto_deposit
     original_auto_deposit = fund_manager.auto_deposit
@@ -240,12 +222,7 @@ async def test_cross_chain_deposit_no_1inch_api_key():
     fund_manager.oneinch_api_key = None
     
     # Mock balances
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=200_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=30_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 200_000_000, Decimal("30.0"))
     
     # Try cross-chain deposit from Ethereum (not Polygon)
     with pytest.raises(FundManagerError) as exc_info:
@@ -287,12 +264,7 @@ async def test_balance_check_decimal_precision():
     fund_manager = create_test_fund_manager()
     
     # Mock balances with precise values
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=123_456_789))  # 123.456789 USDC
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=987_654_321))  # 987.654321 USDC
-    )
+    _setup_balance_mocks(fund_manager, 123_456_789, Decimal("987.654321"))
     
     eoa_balance, proxy_balance = await fund_manager.check_balance()
     
@@ -307,12 +279,7 @@ async def test_deposit_amount_calculation():
     fund_manager = create_test_fund_manager(dry_run=True)
     
     # Mock balances: Proxy=25 (need 75 to reach target 100)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=200_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=25_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 200_000_000, Decimal("25.0"))
     
     # Execute deposit
     await fund_manager.auto_deposit()
@@ -329,12 +296,7 @@ async def test_withdrawal_amount_calculation():
     fund_manager = create_test_fund_manager(dry_run=True)
     
     # Mock balances: Proxy=600 (withdraw 500 to reach target 100)
-    fund_manager.usdc_contract.functions.balanceOf = Mock(
-        return_value=Mock(call=Mock(return_value=100_000_000))
-    )
-    fund_manager.ctf_exchange_contract.functions.getCollateralBalance = Mock(
-        return_value=Mock(call=Mock(return_value=600_000_000))
-    )
+    _setup_balance_mocks(fund_manager, 100_000_000, Decimal("600.0"))
     
     # Execute withdrawal
     await fund_manager.auto_withdraw()

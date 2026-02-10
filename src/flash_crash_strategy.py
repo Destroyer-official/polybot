@@ -210,7 +210,8 @@ class FlashCrashStrategy:
                     "entry_price": price,
                     "size": Decimal(str(shares)),
                     "side": side,
-                    "market_id": market.market_id
+                    "market_id": market.market_id,
+                    "entry_time": datetime.now()  # FIX: Track entry time for learning
                 }
                 return True
             
@@ -267,7 +268,8 @@ class FlashCrashStrategy:
                     "side": side,
                     "market_id": market.market_id,
                     "order_id": order_id,
-                    "neg_risk": is_negrisk
+                    "neg_risk": is_negrisk,
+                    "entry_time": datetime.now()  # FIX: Track entry time for learning
                 }
                 return True
             else:
@@ -313,6 +315,7 @@ class FlashCrashStrategy:
             is_negrisk = position.get("neg_risk", True)  # Default True for safety
             
             # Place sell order using correct CLOB API format
+            # FIX Bug #9: Use SimpleNamespace (matching buy side) instead of dict
             try:
                 response = self.clob_client.create_and_post_order(
                     OrderArgs(
@@ -321,19 +324,25 @@ class FlashCrashStrategy:
                         size=shares,
                         side=SELL,
                     ),
-                    options={
-                        "tick_size": "0.01",
-                        "neg_risk": is_negrisk,
-                    },
+                    options=SimpleNamespace(
+                        tick_size="0.01",
+                        neg_risk=is_negrisk,
+                    ),
                     order_type=OrderType.GTC
                 )
             except TypeError:
-                # Fallback for older py_clob_client versions
+                # Fallback: use create_order + post_order (matching buy fallback pattern)
                 order = self.clob_client.create_order(
-                    token_id=token_id,
-                    price=float(current_price),
-                    size=shares,
-                    side="SELL"
+                    OrderArgs(
+                        token_id=token_id,
+                        price=float(current_price),
+                        size=shares,
+                        side=SELL,
+                    ),
+                    options=SimpleNamespace(
+                        tick_size="0.01",
+                        neg_risk=is_negrisk,
+                    )
                 )
                 response = self.clob_client.post_order(order)
             
@@ -355,6 +364,20 @@ class FlashCrashStrategy:
         except Exception as e:
             logger.error(f"Error exiting position: {e}", exc_info=True)
             return False
+    
+    def _get_exit_reason(self, token_id: str, current_price: Decimal) -> str:
+        """Determine the exit reason for a position (for learning engine logging)."""
+        if token_id not in self.positions:
+            return "unknown"
+        position = self.positions[token_id]
+        entry_price = position["entry_price"]
+        size = position["size"]
+        pnl = (current_price - entry_price) * size
+        if pnl >= self.take_profit:
+            return "take_profit"
+        elif pnl <= -self.stop_loss:
+            return "stop_loss"
+        return "manual"
     
     async def scan_market(self, market: Market) -> None:
         """
@@ -383,10 +406,20 @@ class FlashCrashStrategy:
             # Check exit conditions for existing positions
             if market.yes_token_id in self.positions:
                 if await self.check_exit_conditions(market.yes_token_id, market.yes_price):
+                    # FIX Bug #10: Log exit reason for learning (actual recording via orchestrator)
+                    reason = self._get_exit_reason(market.yes_token_id, market.yes_price)
+                    entry = self.positions[market.yes_token_id]["entry_price"]
+                    pnl_pct = (market.yes_price - entry) / entry if entry > 0 else Decimal("0")
+                    logger.info(f"📚 Flash crash exit: YES | reason={reason} | P&L={float(pnl_pct)*100:.2f}%")
                     await self.exit_position(market.yes_token_id, market.yes_price)
             
             if market.no_token_id in self.positions:
                 if await self.check_exit_conditions(market.no_token_id, market.no_price):
+                    # FIX Bug #10: Log exit reason for learning
+                    reason = self._get_exit_reason(market.no_token_id, market.no_price)
+                    entry = self.positions[market.no_token_id]["entry_price"]
+                    pnl_pct = (market.no_price - entry) / entry if entry > 0 else Decimal("0")
+                    logger.info(f"📚 Flash crash exit: NO | reason={reason} | P&L={float(pnl_pct)*100:.2f}%")
                     await self.exit_position(market.no_token_id, market.no_price)
                     
         except Exception as e:

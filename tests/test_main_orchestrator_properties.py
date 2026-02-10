@@ -10,6 +10,7 @@ Tests correctness properties for:
 import pytest
 import json
 import tempfile
+import contextlib
 from pathlib import Path
 from decimal import Decimal
 from datetime import datetime
@@ -20,13 +21,54 @@ from src.main_orchestrator import MainOrchestrator
 from config.config import Config
 
 
+@contextlib.contextmanager
+def _orchestrator_patches(mock_web3):
+    """
+    Apply all patches needed to safely instantiate MainOrchestrator.
+    Uses ExitStack to avoid Python's static nesting limit.
+    
+    Yields a dict of named mocks that tests may need (fund_mgr, circuit_breaker).
+    """
+    patches = {
+        'web3': patch('src.main_orchestrator.Web3', return_value=mock_web3),
+        'clob': patch('src.main_orchestrator.ClobClient'),
+        'tx_mgr': patch('src.main_orchestrator.TransactionManager'),
+        'pos_merger': patch('src.main_orchestrator.PositionMerger'),
+        'order_mgr': patch('src.main_orchestrator.OrderManager'),
+        'safety': patch('src.main_orchestrator.AISafetyGuard'),
+        'fund_mgr': patch('src.main_orchestrator.FundManager'),
+        'internal_arb': patch('src.main_orchestrator.InternalArbitrageEngine'),
+        'cross_arb': patch('src.main_orchestrator.CrossPlatformArbitrageEngine'),
+        'latency_arb': patch('src.main_orchestrator.LatencyArbitrageEngine'),
+        'res_farming': patch('src.main_orchestrator.ResolutionFarmingEngine'),
+        'monitoring': patch('src.main_orchestrator.MonitoringSystem'),
+        'trade_db': patch('src.main_orchestrator.TradeHistoryDB'),
+        'trade_stats': patch('src.main_orchestrator.TradeStatisticsTracker'),
+        'dashboard': patch('src.main_orchestrator.StatusDashboard'),
+        'market_parser': patch('src.main_orchestrator.MarketParser'),
+        'circuit_breaker': patch('src.main_orchestrator.CircuitBreaker'),
+        'wallet_verify': patch('src.wallet_verifier.WalletVerifier.verify_wallet_address', return_value=True),
+        'wallet_detect': patch('src.wallet_type_detector.WalletTypeDetector'),
+        'flash_crash': patch('src.main_orchestrator.FlashCrashStrategy'),
+        'directional': patch('src.main_orchestrator.DirectionalTradingStrategy'),
+        'auto_bridge': patch('src.main_orchestrator.AutoBridgeManager'),
+        'negrisk': patch('src.main_orchestrator.NegRiskArbitrageEngine'),
+        'risk_mgr': patch('src.main_orchestrator.PortfolioRiskManager'),
+        'fifteen_min': patch('src.main_orchestrator.FifteenMinuteCryptoStrategy'),
+        'llm_engine': patch('src.main_orchestrator.LLMDecisionEngineV2'),
+    }
+    with contextlib.ExitStack() as stack:
+        mocks = {name: stack.enter_context(p) for name, p in patches.items()}
+        yield mocks
+
+
 # Test fixtures
 @pytest.fixture
 def mock_config():
     """Create a mock configuration for testing."""
     config = Mock(spec=Config)
     config.private_key = "0x" + "1" * 64
-    config.wallet_address = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+    config.wallet_address = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1"
     config.polygon_rpc_url = "https://polygon-rpc.com"
     config.backup_rpc_urls = []
     config.polymarket_api_url = "https://clob.polymarket.com"
@@ -64,7 +106,7 @@ def mock_web3():
     
     # Mock account
     account = Mock()
-    account.address = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+    account.address = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1"
     web3.eth.account.from_key = Mock(return_value=account)
     
     # Mock gas price
@@ -85,11 +127,12 @@ class TestGasPriceHalt:
     operations until gas prices normalize below the threshold.
     """
     
+    @pytest.mark.asyncio
     @given(
         gas_price_gwei=st.integers(min_value=1, max_value=2000)
     )
     @settings(max_examples=100, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_gas_price_halt_property(self, gas_price_gwei, mock_config, mock_web3):
+    async def test_gas_price_halt_property(self, gas_price_gwei, mock_config, mock_web3):
         """
         Property: Gas price monitoring should halt trading when gas > 800 gwei.
         
@@ -100,29 +143,15 @@ class TestGasPriceHalt:
         # Setup
         mock_web3.eth.gas_price = gas_price_gwei * 10**9  # Convert to wei
         
-        with patch('src.main_orchestrator.Web3', return_value=mock_web3), \
-             patch('src.main_orchestrator.ClobClient'), \
-             patch('src.main_orchestrator.TransactionManager'), \
-             patch('src.main_orchestrator.PositionMerger'), \
-             patch('src.main_orchestrator.OrderManager'), \
-             patch('src.main_orchestrator.AISafetyGuard'), \
-             patch('src.main_orchestrator.FundManager'), \
-             patch('src.main_orchestrator.InternalArbitrageEngine'), \
-             patch('src.main_orchestrator.CrossPlatformArbitrageEngine'), \
-             patch('src.main_orchestrator.LatencyArbitrageEngine'), \
-             patch('src.main_orchestrator.ResolutionFarmingEngine'), \
-             patch('src.main_orchestrator.MonitoringSystem'), \
-             patch('src.main_orchestrator.TradeHistoryDB'), \
-             patch('src.main_orchestrator.TradeStatistics'), \
-             patch('src.main_orchestrator.StatusDashboard'), \
-             patch('src.main_orchestrator.MarketParser'), \
-             patch('src.main_orchestrator.CircuitBreaker'):
+        with _orchestrator_patches(mock_web3) as mocks:
             
             orchestrator = MainOrchestrator(mock_config)
             orchestrator.web3 = mock_web3
+            # FIX: send_alert is now async (re-enabled in _check_gas_price)
+            orchestrator.monitoring.send_alert = AsyncMock()
             
             # Execute
-            result = orchestrator._check_gas_price()
+            result = await orchestrator._check_gas_price()
             
             # Verify property
             if gas_price_gwei > mock_config.max_gas_price_gwei:
@@ -138,12 +167,13 @@ class TestGasPriceHalt:
                 assert orchestrator.gas_price_halted is False, \
                     "gas_price_halted flag should be set to False"
     
+    @pytest.mark.asyncio
     @given(
         initial_gas=st.integers(min_value=900, max_value=1500),
         normalized_gas=st.integers(min_value=50, max_value=700)
     )
     @settings(max_examples=50, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    def test_gas_price_resume_property(self, initial_gas, normalized_gas, mock_config, mock_web3):
+    async def test_gas_price_resume_property(self, initial_gas, normalized_gas, mock_config, mock_web3):
         """
         Property: Trading should resume when gas normalizes after halt.
         
@@ -151,30 +181,16 @@ class TestGasPriceHalt:
         - First check with high gas: returns False, sets halted flag
         - Second check with normal gas: returns True, clears halted flag
         """
-        with patch('src.main_orchestrator.Web3', return_value=mock_web3), \
-             patch('src.main_orchestrator.ClobClient'), \
-             patch('src.main_orchestrator.TransactionManager'), \
-             patch('src.main_orchestrator.PositionMerger'), \
-             patch('src.main_orchestrator.OrderManager'), \
-             patch('src.main_orchestrator.AISafetyGuard'), \
-             patch('src.main_orchestrator.FundManager'), \
-             patch('src.main_orchestrator.InternalArbitrageEngine'), \
-             patch('src.main_orchestrator.CrossPlatformArbitrageEngine'), \
-             patch('src.main_orchestrator.LatencyArbitrageEngine'), \
-             patch('src.main_orchestrator.ResolutionFarmingEngine'), \
-             patch('src.main_orchestrator.MonitoringSystem'), \
-             patch('src.main_orchestrator.TradeHistoryDB'), \
-             patch('src.main_orchestrator.TradeStatistics'), \
-             patch('src.main_orchestrator.StatusDashboard'), \
-             patch('src.main_orchestrator.MarketParser'), \
-             patch('src.main_orchestrator.CircuitBreaker'):
+        with _orchestrator_patches(mock_web3) as mocks:
             
             orchestrator = MainOrchestrator(mock_config)
             orchestrator.web3 = mock_web3
+            # FIX: send_alert is now async (re-enabled in _check_gas_price)
+            orchestrator.monitoring.send_alert = AsyncMock()
             
             # First check: High gas
             mock_web3.eth.gas_price = initial_gas * 10**9
-            result1 = orchestrator._check_gas_price()
+            result1 = await orchestrator._check_gas_price()
             
             # Property: High gas halts trading
             assert result1 is False
@@ -182,7 +198,7 @@ class TestGasPriceHalt:
             
             # Second check: Normalized gas
             mock_web3.eth.gas_price = normalized_gas * 10**9
-            result2 = orchestrator._check_gas_price()
+            result2 = await orchestrator._check_gas_price()
             
             # Property: Normalized gas resumes trading
             assert result2 is True
@@ -236,23 +252,7 @@ class TestStatePersistence:
         with tempfile.TemporaryDirectory() as tmpdir:
             state_file = Path(tmpdir) / "state.json"
             
-            with patch('src.main_orchestrator.Web3', return_value=mock_web3), \
-                 patch('src.main_orchestrator.ClobClient'), \
-                 patch('src.main_orchestrator.TransactionManager'), \
-                 patch('src.main_orchestrator.PositionMerger'), \
-                 patch('src.main_orchestrator.OrderManager'), \
-                 patch('src.main_orchestrator.AISafetyGuard'), \
-                 patch('src.main_orchestrator.FundManager'), \
-                 patch('src.main_orchestrator.InternalArbitrageEngine'), \
-                 patch('src.main_orchestrator.CrossPlatformArbitrageEngine'), \
-                 patch('src.main_orchestrator.LatencyArbitrageEngine'), \
-                 patch('src.main_orchestrator.ResolutionFarmingEngine'), \
-                 patch('src.main_orchestrator.MonitoringSystem'), \
-                 patch('src.main_orchestrator.TradeHistoryDB'), \
-                 patch('src.main_orchestrator.TradeStatistics'), \
-                 patch('src.main_orchestrator.StatusDashboard'), \
-                 patch('src.main_orchestrator.MarketParser'), \
-                 patch('src.main_orchestrator.CircuitBreaker'):
+            with _orchestrator_patches(mock_web3) as mocks:
                 
                 # Create first orchestrator and set state
                 orchestrator1 = MainOrchestrator(mock_config)
@@ -309,23 +309,7 @@ class TestStatePersistence:
         with tempfile.TemporaryDirectory() as tmpdir:
             state_file = Path(tmpdir) / "nonexistent_state.json"
             
-            with patch('src.main_orchestrator.Web3', return_value=mock_web3), \
-                 patch('src.main_orchestrator.ClobClient'), \
-                 patch('src.main_orchestrator.TransactionManager'), \
-                 patch('src.main_orchestrator.PositionMerger'), \
-                 patch('src.main_orchestrator.OrderManager'), \
-                 patch('src.main_orchestrator.AISafetyGuard'), \
-                 patch('src.main_orchestrator.FundManager'), \
-                 patch('src.main_orchestrator.InternalArbitrageEngine'), \
-                 patch('src.main_orchestrator.CrossPlatformArbitrageEngine'), \
-                 patch('src.main_orchestrator.LatencyArbitrageEngine'), \
-                 patch('src.main_orchestrator.ResolutionFarmingEngine'), \
-                 patch('src.main_orchestrator.MonitoringSystem'), \
-                 patch('src.main_orchestrator.TradeHistoryDB'), \
-                 patch('src.main_orchestrator.TradeStatistics'), \
-                 patch('src.main_orchestrator.StatusDashboard'), \
-                 patch('src.main_orchestrator.MarketParser'), \
-                 patch('src.main_orchestrator.CircuitBreaker'):
+            with _orchestrator_patches(mock_web3) as mocks:
                 
                 orchestrator = MainOrchestrator(mock_config)
                 orchestrator.state_file = state_file
@@ -369,23 +353,9 @@ class TestHeartbeatCircuitBreaker:
         Note: This test validates the heartbeat check itself. The circuit breaker
         activation logic would be implemented in the error recovery module.
         """
-        with patch('src.main_orchestrator.Web3', return_value=mock_web3), \
-             patch('src.main_orchestrator.ClobClient'), \
-             patch('src.main_orchestrator.TransactionManager'), \
-             patch('src.main_orchestrator.PositionMerger'), \
-             patch('src.main_orchestrator.OrderManager'), \
-             patch('src.main_orchestrator.AISafetyGuard'), \
-             patch('src.main_orchestrator.FundManager') as mock_fund_mgr, \
-             patch('src.main_orchestrator.InternalArbitrageEngine'), \
-             patch('src.main_orchestrator.CrossPlatformArbitrageEngine'), \
-             patch('src.main_orchestrator.LatencyArbitrageEngine'), \
-             patch('src.main_orchestrator.ResolutionFarmingEngine'), \
-             patch('src.main_orchestrator.MonitoringSystem'), \
-             patch('src.main_orchestrator.TradeHistoryDB'), \
-             patch('src.main_orchestrator.TradeStatistics'), \
-             patch('src.main_orchestrator.StatusDashboard'), \
-             patch('src.main_orchestrator.MarketParser'), \
-             patch('src.main_orchestrator.CircuitBreaker') as mock_cb:
+        with _orchestrator_patches(mock_web3) as mocks:
+            mock_fund_mgr = mocks['fund_mgr']
+            mock_cb = mocks['circuit_breaker']
             
             orchestrator = MainOrchestrator(mock_config)
             orchestrator.web3 = mock_web3
@@ -431,23 +401,8 @@ class TestHeartbeatCircuitBreaker:
         """
         Property: Successful heartbeat should reset failure counter.
         """
-        with patch('src.main_orchestrator.Web3', return_value=mock_web3), \
-             patch('src.main_orchestrator.ClobClient'), \
-             patch('src.main_orchestrator.TransactionManager'), \
-             patch('src.main_orchestrator.PositionMerger'), \
-             patch('src.main_orchestrator.OrderManager'), \
-             patch('src.main_orchestrator.AISafetyGuard'), \
-             patch('src.main_orchestrator.FundManager') as mock_fund_mgr, \
-             patch('src.main_orchestrator.InternalArbitrageEngine'), \
-             patch('src.main_orchestrator.CrossPlatformArbitrageEngine'), \
-             patch('src.main_orchestrator.LatencyArbitrageEngine'), \
-             patch('src.main_orchestrator.ResolutionFarmingEngine'), \
-             patch('src.main_orchestrator.MonitoringSystem'), \
-             patch('src.main_orchestrator.TradeHistoryDB'), \
-             patch('src.main_orchestrator.TradeStatistics'), \
-             patch('src.main_orchestrator.StatusDashboard'), \
-             patch('src.main_orchestrator.MarketParser'), \
-             patch('src.main_orchestrator.CircuitBreaker'):
+        with _orchestrator_patches(mock_web3) as mocks:
+            mock_fund_mgr = mocks['fund_mgr']
             
             orchestrator = MainOrchestrator(mock_config)
             orchestrator.web3 = mock_web3

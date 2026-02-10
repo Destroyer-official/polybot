@@ -70,6 +70,8 @@ class Position:
     market_id: str
     asset: str
     strategy: str = "unknown"  # "sum_to_one", "latency", "directional"
+    neg_risk: bool = True  # FIX: Track neg_risk flag per position for correct sell orders
+    highest_price: Decimal = Decimal("0")  # PHASE 3A: Track peak price for trailing stop
 
 
 class BinancePriceFeed:
@@ -344,7 +346,7 @@ class FifteenMinuteCryptoStrategy:
             min_relevance=30.0
         )
         
-        # Active positions        # Active positions
+        # Active positions
         self.positions: Dict[str, Position] = {}
         
         # Track last LLM check time per asset to avoid rate limits
@@ -358,6 +360,28 @@ class FifteenMinuteCryptoStrategy:
             "total_profit": Decimal("0"),
             "arbitrage_opportunities": 0,
         }
+        
+        # PHASE 3A: Trailing stop-loss config
+        self.trailing_stop_pct = Decimal("0.02")  # 2% trailing stop from peak
+        self.trailing_activation_pct = Decimal("0.005")  # Activate after 0.5% profit
+        
+        # PHASE 3B: Progressive position sizing
+        self.consecutive_wins = 0
+        self.consecutive_losses = 0
+        
+        # PHASE 4A: Portfolio Risk Manager
+        from src.portfolio_risk_manager import PortfolioRiskManager
+        self.risk_manager = PortfolioRiskManager(
+            initial_capital=self.trade_size * self.max_positions,
+        )
+        
+        # PHASE 4B: Daily trade limit
+        self.max_daily_trades = 50
+        self.daily_trade_count = 0
+        self.last_trade_date = datetime.now(timezone.utc).date()
+        
+        # PHASE 4C: Per-asset exposure limit
+        self.max_positions_per_asset = 2
         
         # NEW: Adaptive Learning Engine
         self.adaptive_learning = None
@@ -415,10 +439,12 @@ class FifteenMinuteCryptoStrategy:
         logger.info("  🎯 Ensemble Decisions (multiple model voting)")
         logger.info("  ⚡ Context Optimization (40% faster LLM)")
         logger.info("=" * 80)
-        logger.info("🤖 PHASE 3 OPTIMIZATIONS ENABLED:")
-        logger.info("  🧠 Reinforcement Learning (45% better strategy selection)")
-        logger.info("  🎯 Ensemble Decisions (35% higher accuracy)")
-        logger.info("  📝 Context Optimization (40% faster LLM responses)")
+        logger.info("🛡️ PRODUCTION HARDENING ENABLED:")
+        logger.info("  📈 Trailing Stop-Loss (lock in profits)")
+        logger.info("  📊 Progressive Position Sizing (adaptive risk)")
+        logger.info("  🔒 Portfolio Risk Manager (holistic risk control)")
+        logger.info(f"  📋 Daily Trade Limit: {self.max_daily_trades}")
+        logger.info(f"  🎯 Per-Asset Limit: {self.max_positions_per_asset} positions")
         logger.info("=" * 80)
     
     async def start(self):
@@ -579,6 +605,64 @@ class FifteenMinuteCryptoStrategy:
                 f"⏰ SAFETY BLOCK: {market.asset} market closes in {time_remaining:.1f}min "
                 f"(minimum: {self.MIN_ENTRY_TIME_MINUTES}min) - skipping entry"
             )
+            return False
+        return True
+    
+    def _calculate_position_size(self) -> Decimal:
+        """
+        PHASE 3B: Progressive position sizing based on recent win/loss streaks.
+        
+        - After 3+ consecutive losses: reduce to 0.5x base size (protect capital)
+        - After 3+ consecutive wins: increase to 1.5x base size (ride momentum)
+        - Otherwise: use base size (1.0x)
+        - Capped at 2.0x to prevent excessive risk
+        
+        Returns:
+            Adjusted trade size in USD
+        """
+        multiplier = Decimal("1.0")
+        
+        if self.consecutive_losses >= 3:
+            multiplier = Decimal("0.5")
+            logger.info(f"📉 Progressive sizing: 0.5x (after {self.consecutive_losses} consecutive losses)")
+        elif self.consecutive_wins >= 3:
+            multiplier = min(Decimal("2.0"), Decimal("1.0") + Decimal("0.5") * Decimal(str(min(self.consecutive_wins - 2, 2))))
+            logger.info(f"📈 Progressive sizing: {multiplier}x (after {self.consecutive_wins} consecutive wins)")
+        
+        return self.trade_size * multiplier
+    
+    def _check_daily_limit(self) -> bool:
+        """
+        PHASE 4B: Check if daily trade limit has been reached.
+        Resets counter at midnight UTC.
+        
+        Returns:
+            True if can trade, False if limit reached
+        """
+        today = datetime.now(timezone.utc).date()
+        if today != self.last_trade_date:
+            self.daily_trade_count = 0
+            self.last_trade_date = today
+            logger.info("🔄 Daily trade counter reset (new day)")
+        
+        if self.daily_trade_count >= self.max_daily_trades:
+            logger.warning(f"🚫 Daily trade limit reached ({self.daily_trade_count}/{self.max_daily_trades}). No new entries until tomorrow.")
+            return False
+        return True
+    
+    def _check_asset_exposure(self, asset: str) -> bool:
+        """
+        PHASE 4C: Check if per-asset exposure limit has been reached.
+        
+        Args:
+            asset: Asset to check ("BTC", "ETH", etc.)
+            
+        Returns:
+            True if can trade this asset, False if limit reached
+        """
+        asset_positions = sum(1 for p in self.positions.values() if p.asset.upper() == asset.upper())
+        if asset_positions >= self.max_positions_per_asset:
+            logger.warning(f"🚫 Per-asset limit reached for {asset}: {asset_positions}/{self.max_positions_per_asset} positions.")
             return False
         return True
     
@@ -787,9 +871,42 @@ class FifteenMinuteCryptoStrategy:
                 self.stats["arbitrage_opportunities"] += 1
                 
                 if len(self.positions) < self.max_positions:
+                    # PHASE 4B: Check daily trade limit
+                    if not self._check_daily_limit():
+                        return False
+                    
+                    # PHASE 4C: Check per-asset exposure limit
+                    if not self._check_asset_exposure(market.asset):
+                        return False
+                    
+                    # FIX Bug #6: Check learning engines before entering
+                    should_trade, score, reason = self._should_take_trade("sum_to_one", market.asset, float(profit_after_fees))
+                    if not should_trade:
+                        logger.info(f"🧠 LEARNING BLOCKED sum_to_one: {reason}")
+                        return False
+                    logger.info(f"🧠 LEARNING APPROVED sum_to_one (score={score:.0f}%): {reason}")
+                    
+                    # PHASE 3C: Check order book liquidity before sum-to-one entry
+                    can_trade_up, liq_reason_up = await self.order_book_analyzer.check_liquidity(
+                        market.up_token_id, "buy", Decimal("10.0")
+                    )
+                    if not can_trade_up:
+                        logger.warning(f"⏭️ Skipping sum-to-one (UP illiquid): {liq_reason_up}")
+                        return False
+                    
+                    can_trade_dn, liq_reason_dn = await self.order_book_analyzer.check_liquidity(
+                        market.down_token_id, "buy", Decimal("10.0")
+                    )
+                    if not can_trade_dn:
+                        logger.warning(f"⏭️ Skipping sum-to-one (DOWN illiquid): {liq_reason_dn}")
+                        return False
+                    
+                    # PHASE 3B: Use progressive position sizing
+                    adjusted_size = self._calculate_position_size()
+                    
                     # Buy both sides - ENFORCE min 5 shares per side
-                    up_shares = max(5.0, float(self.trade_size / 2 / market.up_price))
-                    down_shares = max(5.0, float(self.trade_size / 2 / market.down_price))
+                    up_shares = max(5.0, float(adjusted_size / 2 / market.up_price))
+                    down_shares = max(5.0, float(adjusted_size / 2 / market.down_price))
                     
                     # Execute trades
                     await self._place_order(market, "UP", market.up_price, up_shares, strategy="sum_to_one")
@@ -851,6 +968,21 @@ class FifteenMinuteCryptoStrategy:
             logger.info(f"   Current UP price: ${market.up_price}")
             
             if len(self.positions) < self.max_positions:
+                # FIX Bug #6: Check learning engines before entering
+                should_trade, score, reason = self._should_take_trade("latency", asset, float(confidence) / 100.0)
+                if not should_trade:
+                    logger.info(f"🧠 LEARNING BLOCKED latency UP: {reason}")
+                    return False
+                logger.info(f"🧠 LEARNING APPROVED latency UP (score={score:.0f}%): {reason}")
+                
+                # PHASE 4B: Check daily trade limit
+                if not self._check_daily_limit():
+                    return False
+                
+                # PHASE 4C: Check per-asset exposure limit
+                if not self._check_asset_exposure(asset):
+                    return False
+                
                 # PHASE 2: Check order book liquidity before trading
                 can_trade, liquidity_reason = await self.order_book_analyzer.check_liquidity(
                     market.up_token_id, "buy", Decimal("10.0")
@@ -876,6 +1008,21 @@ class FifteenMinuteCryptoStrategy:
             logger.info(f"   Current DOWN price: ${market.down_price}")
             
             if len(self.positions) < self.max_positions:
+                # FIX Bug #6: Check learning engines before entering
+                should_trade, score, reason = self._should_take_trade("latency", asset, float(confidence) / 100.0)
+                if not should_trade:
+                    logger.info(f"🧠 LEARNING BLOCKED latency DOWN: {reason}")
+                    return False
+                logger.info(f"🧠 LEARNING APPROVED latency DOWN (score={score:.0f}%): {reason}")
+                
+                # PHASE 4B: Check daily trade limit
+                if not self._check_daily_limit():
+                    return False
+                
+                # PHASE 4C: Check per-asset exposure limit
+                if not self._check_asset_exposure(asset):
+                    return False
+                
                 # PHASE 2: Check order book liquidity
                 can_trade, liquidity_reason = await self.order_book_analyzer.check_liquidity(
                     market.down_token_id, "buy", Decimal("10.0")
@@ -959,14 +1106,21 @@ class FifteenMinuteCryptoStrategy:
             binance_momentum=binance_momentum
         )
         
-        # Portfolio state
+        # FIX Bug #7: Use actual portfolio state instead of hardcoded values
+        total_trades = self.stats.get('trades_won', 0) + self.stats.get('trades_lost', 0)
+        actual_win_rate = self.stats.get('trades_won', 0) / max(1, total_trades)
+        actual_pnl = self.stats.get('total_profit', Decimal('0'))
+        open_pos_list = [
+            {'asset': p.asset, 'side': p.side, 'entry_price': float(p.entry_price)}
+            for p in self.positions.values()
+        ]
         p_state = PortfolioStateV2(
-            available_balance=Decimal("100.0"), 
-            total_balance=Decimal("100.0"),
-            open_positions=[],
-            daily_pnl=Decimal("0"),
-            win_rate_today=0.5,
-            trades_today=0,
+            available_balance=self.trade_size * (self.max_positions - len(self.positions)),
+            total_balance=self.trade_size * self.max_positions,
+            open_positions=open_pos_list,
+            daily_pnl=actual_pnl,
+            win_rate_today=actual_win_rate,
+            trades_today=self.stats.get('trades_placed', 0),
             max_position_size=self.trade_size
         )
         
@@ -980,12 +1134,41 @@ class FifteenMinuteCryptoStrategy:
                 logger.info(f"🧠 LLM SIGNAL: {decision.action.value} ({decision.confidence}%)")
                 logger.info(f"   Reason: {decision.reasoning}")
                 
+                # FIX Bug #6: Check learning engines before directional entry
+                should_trade, score, reason = self._should_take_trade(
+                    "directional", market.asset, decision.confidence / 100.0
+                )
+                if not should_trade:
+                    logger.info(f"🧠 LEARNING BLOCKED directional: {reason}")
+                    return False
+                logger.info(f"🧠 LEARNING APPROVED directional (score={score:.0f}%): {reason}")
+                
+                # PHASE 4B: Check daily trade limit
+                if not self._check_daily_limit():
+                    return False
+                
+                # PHASE 4C: Check per-asset exposure limit
+                if not self._check_asset_exposure(market.asset):
+                    return False
+                
+                # PHASE 3C: Check order book liquidity before directional entry
+                target_token = market.up_token_id if decision.action.value == "buy_yes" else market.down_token_id
+                can_trade, liq_reason = await self.order_book_analyzer.check_liquidity(
+                    target_token, "buy", Decimal("10.0")
+                )
+                if not can_trade:
+                    logger.warning(f"⏭️ Skipping directional (illiquid): {liq_reason}")
+                    return False
+                
+                # PHASE 3B: Use progressive position sizing
+                adjusted_size = self._calculate_position_size()
+                
                 if decision.action.value == "buy_yes":
-                    shares = float(self.trade_size / market.up_price)
+                    shares = float(adjusted_size / market.up_price)
                     await self._place_order(market, "UP", market.up_price, shares, strategy="directional")
                     return True
                 elif decision.action.value == "buy_no":
-                    shares = float(self.trade_size / market.down_price)
+                    shares = float(adjusted_size / market.down_price)
                     await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
                     return True
                     
@@ -1026,9 +1209,41 @@ class FifteenMinuteCryptoStrategy:
             else:
                 pnl_pct = Decimal("0")
             
-            logger.info(f"   Entry: ${position.entry_price} -> Current: ${current_price} (P&L: {pnl_pct * 100:.2f}%)")
+            # PHASE 3A: Update highest_price for trailing stop-loss
+            if current_price > position.highest_price:
+                position.highest_price = current_price
             
-            # Take profit
+            logger.info(f"   Entry: ${position.entry_price} -> Current: ${current_price} (P&L: {pnl_pct * 100:.2f}%) [Peak: ${position.highest_price}]")
+            
+            # PHASE 3A: Trailing stop-loss — activates once profit exceeds activation threshold
+            trailing_triggered = False
+            if pnl_pct >= self.trailing_activation_pct and position.highest_price > 0:
+                drop_from_peak = (position.highest_price - current_price) / position.highest_price
+                if drop_from_peak >= self.trailing_stop_pct:
+                    logger.warning(f"📉 TRAILING STOP on {position.asset} {position.side}!")
+                    logger.warning(f"   Peak: ${position.highest_price} -> Current: ${current_price} (dropped {drop_from_peak * 100:.2f}% from peak)")
+                    trailing_triggered = True
+                    
+                    success = await self._close_position(position, current_price)
+                    if success:
+                        positions_to_close.append(token_id)
+                        self.stats["trades_won"] += 1  # Still a win since we had profit
+                        self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                        self.consecutive_wins += 1
+                        self.consecutive_losses = 0
+                        
+                        hold_mins = (datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60
+                        self._record_trade_outcome(
+                            asset=position.asset, side=position.side,
+                            strategy=position.strategy, entry_price=position.entry_price,
+                            exit_price=current_price, profit_pct=pnl_pct,
+                            hold_time_minutes=hold_mins, exit_reason="trailing_stop"
+                        )
+            
+            if trailing_triggered:
+                continue
+            
+            # Take profit (fixed target — fallback when trailing hasn't activated)
             if pnl_pct >= self.take_profit_pct:
                 logger.info(f"🎉 TAKE PROFIT on {position.asset} {position.side}!")
                 logger.info(f"   Entry: ${position.entry_price} -> Current: ${current_price}")
@@ -1039,47 +1254,17 @@ class FifteenMinuteCryptoStrategy:
                     positions_to_close.append(token_id)
                     self.stats["trades_won"] += 1
                     self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                    self.consecutive_wins += 1
+                    self.consecutive_losses = 0
                     
-                    # NEW: Record trade outcome for learning
-                    if self.adaptive_learning:
-                        outcome = TradeOutcome(
-                            timestamp=datetime.now(timezone.utc),
-                            asset=position.asset,
-                            side=position.side,
-                            entry_price=position.entry_price,
-                            exit_price=current_price,
-                            profit_pct=pnl_pct,
-                            hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
-                            exit_reason="take_profit",
-                            strategy_used=getattr(position, 'strategy', 'unknown'),
-                            time_of_day=datetime.now(timezone.utc).hour
-                        )
-                        self.adaptive_learning.record_trade(outcome)
-                    
-                    # PHASE 2: Record in historical success tracker
-                    self.success_tracker.record_trade(
-                        strategy=getattr(position, 'strategy', 'unknown'),
-                        asset=position.asset,
-                        market_id=position.market_id,
-                        entry_price=position.entry_price,
-                        exit_price=current_price,
-                        size=position.size,
-                        hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
-                        exit_reason="take_profit"
+                    # FIX Bug #5: Use unified _record_trade_outcome instead of 3 separate blocks
+                    hold_mins = (datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60
+                    self._record_trade_outcome(
+                        asset=position.asset, side=position.side,
+                        strategy=position.strategy, entry_price=position.entry_price,
+                        exit_price=current_price, profit_pct=pnl_pct,
+                        hold_time_minutes=hold_mins, exit_reason="take_profit"
                     )
-                    
-                    # FIX: Record in SuperSmart Learning (was missing - 40% weight in decision)
-                    if self.super_smart:
-                        self.super_smart.record_trade(
-                            asset=position.asset,
-                            side=position.side,
-                            entry_price=position.entry_price,
-                            exit_price=current_price,
-                            profit_pct=pnl_pct,
-                            hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
-                            exit_reason="take_profit",
-                            strategy_used=getattr(position, 'strategy', 'unknown')
-                        )
             
             # Stop loss
             elif pnl_pct <= -self.stop_loss_pct:
@@ -1092,47 +1277,17 @@ class FifteenMinuteCryptoStrategy:
                     positions_to_close.append(token_id)
                     self.stats["trades_lost"] += 1
                     self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                    self.consecutive_losses += 1
+                    self.consecutive_wins = 0
                     
-                    # NEW: Record trade outcome for learning
-                    if self.adaptive_learning:
-                        outcome = TradeOutcome(
-                            timestamp=datetime.now(timezone.utc),
-                            asset=position.asset,
-                            side=position.side,
-                            entry_price=position.entry_price,
-                            exit_price=current_price,
-                            profit_pct=pnl_pct,
-                            hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
-                            exit_reason="stop_loss",
-                            strategy_used=getattr(position, 'strategy', 'unknown'),
-                            time_of_day=datetime.now(timezone.utc).hour
-                        )
-                        self.adaptive_learning.record_trade(outcome)
-                    
-                    # PHASE 2: Record in historical success tracker
-                    self.success_tracker.record_trade(
-                        strategy=getattr(position, 'strategy', 'unknown'),
-                        asset=position.asset,
-                        market_id=position.market_id,
-                        entry_price=position.entry_price,
-                        exit_price=current_price,
-                        size=position.size,
-                        hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
-                        exit_reason="stop_loss"
+                    # FIX Bug #5: Use unified _record_trade_outcome instead of 3 separate blocks
+                    hold_mins = (datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60
+                    self._record_trade_outcome(
+                        asset=position.asset, side=position.side,
+                        strategy=position.strategy, entry_price=position.entry_price,
+                        exit_price=current_price, profit_pct=pnl_pct,
+                        hold_time_minutes=hold_mins, exit_reason="stop_loss"
                     )
-                    
-                    # FIX: Record in SuperSmart Learning (was missing - learns from losses)
-                    if self.super_smart:
-                        self.super_smart.record_trade(
-                            asset=position.asset,
-                            side=position.side,
-                            entry_price=position.entry_price,
-                            exit_price=current_price,
-                            profit_pct=pnl_pct,
-                            hold_time_minutes=(datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60,
-                            exit_reason="stop_loss",
-                            strategy_used=getattr(position, 'strategy', 'unknown')
-                        )
             
             # Force exit if position is too old (> 12 minutes - FIXED: exit before market closes)
             position_age = (now - position.entry_time).total_seconds() / 60
@@ -1147,18 +1302,13 @@ class FifteenMinuteCryptoStrategy:
                         self.stats["trades_lost"] += 1
                     self.stats["total_profit"] += (current_price - position.entry_price) * position.size
                     
-                    # FIX: Record time-based exits in learning engines
-                    if self.super_smart:
-                        self.super_smart.record_trade(
-                            asset=position.asset,
-                            side=position.side,
-                            entry_price=position.entry_price,
-                            exit_price=current_price,
-                            profit_pct=pnl_pct,
-                            hold_time_minutes=position_age,
-                            exit_reason="time_exit",
-                            strategy_used=getattr(position, 'strategy', 'unknown')
-                        )
+                    # FIX Bug #5: Use unified _record_trade_outcome for time exits too
+                    self._record_trade_outcome(
+                        asset=position.asset, side=position.side,
+                        strategy=position.strategy, entry_price=position.entry_price,
+                        exit_price=current_price, profit_pct=pnl_pct,
+                        hold_time_minutes=position_age, exit_reason="time_exit"
+                    )
             
             # CRITICAL FIX: Force exit if market is about to close (< 2 minutes remaining)
             time_to_close = (market.end_time - now).total_seconds() / 60
@@ -1173,18 +1323,14 @@ class FifteenMinuteCryptoStrategy:
                         self.stats["trades_lost"] += 1
                     self.stats["total_profit"] += (current_price - position.entry_price) * position.size
                     
-                    # FIX: Record market-closing exits in learning engines
-                    if self.super_smart:
-                        self.super_smart.record_trade(
-                            asset=position.asset,
-                            side=position.side,
-                            entry_price=position.entry_price,
-                            exit_price=current_price,
-                            profit_pct=pnl_pct,
-                            hold_time_minutes=(now - position.entry_time).total_seconds() / 60,
-                            exit_reason="market_closing",
-                            strategy_used=getattr(position, 'strategy', 'unknown')
-                        )
+                    # FIX Bug #5: Use unified _record_trade_outcome for market closing too
+                    hold_mins = (now - position.entry_time).total_seconds() / 60
+                    self._record_trade_outcome(
+                        asset=position.asset, side=position.side,
+                        strategy=position.strategy, entry_price=position.entry_price,
+                        exit_price=current_price, profit_pct=pnl_pct,
+                        hold_time_minutes=hold_mins, exit_reason="market_closing"
+                    )
         
         # Remove closed positions
         for token_id in positions_to_close:
@@ -1223,6 +1369,15 @@ class FifteenMinuteCryptoStrategy:
         logger.info(f"   Value: ${float(price) * shares:.2f}")
         logger.info("=" * 80)
         
+        # PHASE 4A: Check portfolio risk manager
+        risk_metrics = self.risk_manager.check_can_trade(
+            proposed_size=Decimal(str(float(price) * shares)),
+            market_id=market.market_id
+        )
+        if not risk_metrics.can_trade:
+            logger.warning(f"🛡️ RISK MANAGER BLOCKED: {risk_metrics.reason}")
+            return False
+        
         if self.dry_run:
             logger.info("DRY RUN: Order simulated (not placed)")
             # Track position for testing
@@ -1234,9 +1389,13 @@ class FifteenMinuteCryptoStrategy:
                 entry_time=datetime.now(timezone.utc),
                 market_id=market.market_id,
                 asset=market.asset,
-                strategy=strategy
+                strategy=strategy,
+                highest_price=price  # PHASE 3A: Initialize peak price
             )
             self.stats["trades_placed"] += 1
+            self.daily_trade_count += 1
+            # PHASE 4A: Register position with risk manager
+            self.risk_manager.add_position(market.market_id, side, price, Decimal(str(shares)))
             return True
         
         try:
@@ -1273,7 +1432,7 @@ class FifteenMinuteCryptoStrategy:
                 ),
                 options=SimpleNamespace(
                     tick_size=tick_size,
-                    neg_risk=False, # Set to False as per instruction
+                    neg_risk=getattr(market, 'neg_risk', True),  # FIX Bug #4: Use market's actual neg_risk flag
                 )
             )
             response = self.clob_client.post_order(order)
@@ -1285,7 +1444,7 @@ class FifteenMinuteCryptoStrategy:
                 
                 logger.info(f"✅ ORDER PLACED: {order_id}")
                 
-                # Track position
+                # Track position (including neg_risk for correct sell orders)
                 self.positions[token_id] = Position(
                     token_id=token_id,
                     side=side,
@@ -1294,9 +1453,14 @@ class FifteenMinuteCryptoStrategy:
                     entry_time=datetime.now(timezone.utc),
                     market_id=market.market_id,
                     asset=market.asset,
-                    strategy=strategy
+                    strategy=strategy,
+                    neg_risk=getattr(market, 'neg_risk', True),
+                    highest_price=price  # PHASE 3A: Initialize peak price
                 )
                 self.stats["trades_placed"] += 1
+                self.daily_trade_count += 1
+                # PHASE 4A: Register position with risk manager
+                self.risk_manager.add_position(market.market_id, side, price, Decimal(str(shares)))
                 return True
             else:
                 logger.error("❌ ORDER FAILED: Empty response")
@@ -1345,7 +1509,7 @@ class FifteenMinuteCryptoStrategy:
                 ),
                 options=SimpleNamespace(
                     tick_size="0.01",
-                    neg_risk=False,  # CRITICAL: Must be False for 15-min crypto markets
+                    neg_risk=getattr(position, 'neg_risk', True),  # FIX Bug #4: Use position's stored neg_risk
                 )
             )
             response = self.clob_client.post_order(order)
@@ -1355,6 +1519,11 @@ class FifteenMinuteCryptoStrategy:
                 if isinstance(response, dict):
                     order_id = response.get("orderID") or response.get("order_id") or "unknown"
                 logger.info(f"✅ POSITION CLOSED: {order_id}")
+                # PHASE 4A: Close position in risk manager
+                try:
+                    self.risk_manager.close_position(position.market_id, current_price)
+                except Exception as e:
+                    logger.debug(f"Risk manager close_position: {e}")
                 return True
             else:
                 logger.error("❌ Close failed: No response")
@@ -1413,6 +1582,16 @@ class FifteenMinuteCryptoStrategy:
             
             for token_id in orphan_positions:
                 if token_id in self.positions:
+                    position = self.positions[token_id]
+                    age_min = (now - position.entry_time).total_seconds() / 60
+                    # FIX Bug #8: Record orphan exits in learning engines
+                    self._record_trade_outcome(
+                        asset=position.asset, side=position.side,
+                        strategy=position.strategy, entry_price=position.entry_price,
+                        exit_price=position.entry_price,  # Unknown exit price, assume breakeven
+                        profit_pct=Decimal('-0.015'),  # Estimate 1.5% loss (fees)
+                        hold_time_minutes=age_min, exit_reason="orphan_expired"
+                    )
                     del self.positions[token_id]
                     self.stats["trades_lost"] += 1  # Count as loss since we couldn't exit properly
                     
