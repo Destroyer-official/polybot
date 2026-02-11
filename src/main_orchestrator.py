@@ -1092,7 +1092,7 @@ class MainOrchestrator:
                 loop_start = time.time()
                 
                 # Check gas price
-                gas_ok = self._check_gas_price()
+                gas_ok = await self._check_gas_price()
                 
                 if gas_ok and not self.circuit_breaker.is_open:
                     # Scan and execute
