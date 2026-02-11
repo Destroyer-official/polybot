@@ -1260,22 +1260,12 @@ class FifteenMinuteCryptoStrategy:
         # ============================================================
         # Use ensemble engine for 35% better accuracy through consensus voting
         try:
-            # Build portfolio state dict for ensemble
-            portfolio_dict = {
-                'available_balance': float(p_state.available_balance),
-                'total_balance': float(p_state.total_balance),
-                'open_positions': p_state.open_positions,
-                'daily_pnl': float(p_state.daily_pnl),
-                'win_rate_today': p_state.win_rate_today,
-                'trades_today': p_state.trades_today,
-                'max_position_size': float(p_state.max_position_size)
-            }
-            
             # Get ensemble decision (combines all models)
+            # Pass objects directly - ensemble handles both Dict and object types
             ensemble_decision = await self.ensemble_engine.make_decision(
                 asset=market.asset,
-                market_context=ctx.__dict__,
-                portfolio_state=portfolio_dict,
+                market_context=ctx,
+                portfolio_state=p_state,
                 opportunity_type="directional"
             )
             
@@ -1338,6 +1328,10 @@ class FifteenMinuteCryptoStrategy:
                     shares = float(adjusted_size / market.down_price)
                     await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
                     return True
+                elif ensemble_decision.action == "buy_both":
+                    # buy_both is for arbitrage, not directional - treat as skip
+                    logger.info(f"🎯 ENSEMBLE: buy_both not applicable for directional trade - skipping")
+                    return False
             else:
                 logger.info(f"🎯 ENSEMBLE REJECTED: {ensemble_decision.action}")
                 logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")

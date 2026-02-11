@@ -93,8 +93,8 @@ class EnsembleDecisionEngine:
     async def make_decision(
         self,
         asset: str,
-        market_context: Dict,
-        portfolio_state: Dict,
+        market_context,  # Can be Dict or MarketContextV2 object
+        portfolio_state,  # Can be Dict or PortfolioStateV2 object
         opportunity_type: str = "latency"
     ) -> EnsembleDecision:
         """
@@ -102,14 +102,20 @@ class EnsembleDecisionEngine:
         
         Args:
             asset: Asset symbol
-            market_context: Market data
-            portfolio_state: Portfolio state
+            market_context: Market data (Dict or MarketContextV2 object)
+            portfolio_state: Portfolio state (Dict or PortfolioStateV2 object)
             opportunity_type: Type of opportunity
             
         Returns:
             EnsembleDecision with consensus vote
         """
         model_votes = {}
+        
+        # Convert objects to dict for RL engine if needed
+        if hasattr(market_context, '__dict__'):
+            market_dict = market_context.__dict__
+        else:
+            market_dict = market_context
         
         # 1. Get LLM decision (40% weight)
         if self.llm_engine:
@@ -132,15 +138,15 @@ class EnsembleDecisionEngine:
             try:
                 strategy, rl_confidence = self.rl_engine.select_strategy(
                     asset=asset,
-                    volatility=market_context.get("volatility"),
-                    trend=market_context.get("trend"),
-                    liquidity=market_context.get("liquidity")
+                    volatility=market_dict.get("volatility"),
+                    trend=market_dict.get("trend"),
+                    liquidity=market_dict.get("liquidity")
                 )
                 
                 # Map strategy to action
                 if strategy == "latency":
                     # Use trend to determine direction
-                    trend = market_context.get("trend", "neutral")
+                    trend = market_dict.get("trend", "neutral")
                     if trend == "bullish":
                         rl_action = "buy_yes"
                     elif trend == "bearish":
@@ -149,7 +155,7 @@ class EnsembleDecisionEngine:
                         rl_action = "skip"
                 elif strategy == "directional":
                     # Similar to latency
-                    trend = market_context.get("trend", "neutral")
+                    trend = market_dict.get("trend", "neutral")
                     rl_action = "buy_yes" if trend == "bullish" else "buy_no" if trend == "bearish" else "skip"
                 else:
                     rl_action = "skip"  # Other strategies not directional
@@ -243,7 +249,8 @@ class EnsembleDecisionEngine:
             "buy_yes": 0.0,
             "buy_no": 0.0,
             "skip": 0.0,
-            "neutral": 0.0
+            "neutral": 0.0,
+            "buy_both": 0.0  # For arbitrage opportunities
         }
         
         total_weight = 0.0
@@ -264,8 +271,12 @@ class EnsembleDecisionEngine:
             # Weight by confidence (0-100 -> 0-1)
             confidence_weight = vote.confidence / 100.0
             
-            # Add weighted vote
-            action_scores[vote.action] += weight * confidence_weight
+            # Add weighted vote (handle unknown actions gracefully)
+            if vote.action in action_scores:
+                action_scores[vote.action] += weight * confidence_weight
+            else:
+                # Unknown action, treat as skip
+                action_scores["skip"] += weight * confidence_weight
             total_weight += weight
         
         # Normalize scores
@@ -350,8 +361,8 @@ class EnsembleDecisionEngine:
             )
             return False
         
-        # Require minimum confidence
-        if decision.confidence < 50.0:
+        # Require minimum confidence (lowered to 25% to allow more trades)
+        if decision.confidence < 25.0:
             logger.debug(f"⏭️ Low confidence: {decision.confidence:.1f}%")
             return False
         
