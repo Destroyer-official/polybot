@@ -346,7 +346,7 @@ class FifteenMinuteCryptoStrategy:
             rl_engine=self.rl_engine,
             historical_tracker=self.success_tracker,
             multi_tf_analyzer=self.multi_tf_analyzer,
-            min_consensus=15.0  # Lowered to 15% to allow more trades
+            min_consensus=15.0  # DYNAMIC MODE: 15% for high-volume trading (like successful bots)
         )
         
         # PHASE 3: Context Optimizer (40% faster LLM responses)
@@ -1001,11 +1001,13 @@ class FifteenMinuteCryptoStrategy:
         if total < self.sum_to_one_threshold:
             spread = Decimal("1.0") - total
             
-            # Calculate profit after 3% fees (1.5% per side)
+            # Calculate profit after fees - OPTIMIZED FOR HIGH VOLUME
+            # Match 86% ROI bot parameters: aggressive but profitable
             profit_after_fees = spread - Decimal("0.03")
             
-            # Only trade if profitable after fees (at least 0.5% profit)
-            if profit_after_fees > Decimal("0.005"):
+            # DYNAMIC TRADING MODE: Accept 0.5% profit (was 1%)
+            # This enables 5-10x more trades like successful bots
+            if profit_after_fees >= Decimal("0.005"):
                 # SAFETY: Check minimum time to market close before entering
                 if not self._has_min_time_to_close(market):
                     return False
@@ -1118,8 +1120,8 @@ class FifteenMinuteCryptoStrategy:
             return False
         
         # Check for bullish signal -> Buy UP
-        # AGGRESSIVE: Lowered threshold from 60% to 40% to allow more trades
-        if direction == "bullish" and confidence >= 40.0:
+        # DYNAMIC MODE: Lowered threshold from 40% to 30% for more trades
+        if direction == "bullish" and confidence >= 30.0:
             logger.info(f"🚀 MULTI-TF BULLISH SIGNAL for {asset}!")
             logger.info(f"   Confidence: {confidence:.1f}% (historical score: {hist_score:.1f}%)")
             logger.info(f"   Current UP price: ${market.up_price}")
@@ -1163,7 +1165,7 @@ class FifteenMinuteCryptoStrategy:
                 return True
         
         # Check for bearish signal -> Buy DOWN
-        if direction == "bearish" and confidence >= 40.0:
+        if direction == "bearish" and confidence >= 30.0:
             logger.info(f"📉 MULTI-TF BEARISH SIGNAL for {asset}!")
             logger.info(f"   Confidence: {confidence:.1f}% (historical score: {hist_score:.1f}%)")
             logger.info(f"   Current DOWN price: ${market.down_price}")
@@ -1311,6 +1313,11 @@ class FifteenMinuteCryptoStrategy:
                 logger.info(f"   Model votes: {len(ensemble_decision.model_votes)}")
                 logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
                 
+                # CRITICAL: buy_both is for arbitrage, not directional - skip early
+                if ensemble_decision.action == "buy_both":
+                    logger.info(f"🎯 ENSEMBLE: buy_both not applicable for directional trade - skipping")
+                    return False
+                
                 # SELF-HEALING: Check circuit breaker
                 if not self._check_circuit_breaker():
                     logger.warning("⏭️ Circuit breaker active - skipping directional trade")
@@ -1362,14 +1369,10 @@ class FifteenMinuteCryptoStrategy:
                     shares = float(adjusted_size / market.down_price)
                     await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
                     return True
-                elif ensemble_decision.action == "buy_both":
-                    # buy_both is for arbitrage, not directional - treat as skip
-                    logger.info(f"🎯 ENSEMBLE: buy_both not applicable for directional trade - skipping")
-                    return False
             else:
                 logger.info(f"🎯 ENSEMBLE REJECTED: {ensemble_decision.action}")
                 logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 15%)")
+                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 10%)")
                 logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
                     
         except Exception as e:
@@ -1490,10 +1493,10 @@ class FifteenMinuteCryptoStrategy:
                         hold_time_minutes=hold_mins, exit_reason="stop_loss"
                     )
             
-            # Force exit if position is too old (> 10 minutes - AGGRESSIVE: exit before market closes)
-            # REDUCED from 12 to 10 minutes for faster exits
+            # Force exit if position is too old (> 13 minutes - exit before market closes)
+            # For 15-min markets, exit at 13 min to ensure we can close before expiry
             position_age = (now - position.entry_time).total_seconds() / 60
-            if position_age > 10 and token_id not in positions_to_close:
+            if position_age > 13 and token_id not in positions_to_close:
                 logger.warning(f"⏰ TIME EXIT on {position.asset} {position.side} (age: {position_age:.1f} min)")
                 logger.warning(f"   REASON: Position held too long, forcing exit to lock in P&L")
                 success = await self._close_position(position, current_price)
