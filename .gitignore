@@ -119,8 +119,6 @@ comprehensive_*.py
 !tests/test_*.py
 
 # Server files
-fifteen_min_crypto_strategy_*_server*.py
-*_from_server.py
 
 # Cleanup
 cleanup_repo.py
