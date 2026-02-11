@@ -73,17 +73,26 @@ python bot.py
 ### Deploy to AWS
 
 ```bash
-# 1. Update SERVER_IP in deploy_to_aws.sh
-nano deploy_to_aws.sh
+# 1. Commit and push changes
+git add .
+git commit -m "Your changes"
+git push origin main
 
-# 2. Deploy
-chmod +x deploy_to_aws.sh
-./deploy_to_aws.sh
-
-# 3. Monitor logs
+# 2. SSH to server and pull
 ssh -i money.pem ubuntu@YOUR_SERVER_IP
+cd /home/ubuntu/polybot
+git fetch --all
+git reset --hard origin/main
+
+# 3. Clear cache and restart
+find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+sudo systemctl restart polybot
+
+# 4. Monitor logs
 sudo journalctl -u polybot -f
 ```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for detailed deployment guide.
 
 ## 📊 Trading Strategies
 
@@ -194,8 +203,9 @@ sudo journalctl -u polybot -f
 
 ## 📚 Documentation
 
-- [Deployment Guide](DEPLOY_NOW.md) - Complete deployment instructions
-- [Trading Fixes](COMPREHENSIVE_TRADING_FIXES.md) - Recent fixes and improvements
+- [Deployment Guide](DEPLOYMENT.md) - Git-based deployment workflow
+- [Slippage Fix](SLIPPAGE_FIX.md) - Recent slippage issue fix
+- [Trading Fixes](COMPREHENSIVE_TRADING_FIXES.md) - All fixes and improvements
 - [API Documentation](docs/) - Detailed API documentation
 
 ## 🔒 Security
