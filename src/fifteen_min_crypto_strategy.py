@@ -147,7 +147,15 @@ class BinancePriceFeed:
                             elif msg.type == aiohttp.WSMsgType.ERROR:
                                 logger.error(f"WebSocket error: {msg.data}")
                                 break
-                                
+            
+            except aiohttp.ClientResponseError as e:
+                if e.status == 451:
+                    logger.warning(f"⚠️ Geo-blocked (451) at {url}. Switching endpoint...")
+                    current_url_index = (current_url_index + 1) % len(urls)
+                else:
+                    logger.error(f"Binance WS Connection Error: {e}")
+                await asyncio.sleep(5)
+
             except Exception as e:
                 error_str = str(e)
                 logger.error(f"Binance WebSocket error: {error_str}")
@@ -155,7 +163,7 @@ class BinancePriceFeed:
                 # Check for 451 (Unavailable For Legal Reasons - Geo-blocking)
                 if "451" in error_str or "status" in error_str.lower():
                     logger.warning("⚠️  Binance.com blocked (451). Switching to Binance.US...")
-                    current_url_index = 1 - current_url_index  # Toggle between 0 and 1
+                    current_url_index = (current_url_index + 1) % len(urls)  # Cycle through URLs
                 
                 await asyncio.sleep(5)  # Reconnect after 5 seconds
     
