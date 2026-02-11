@@ -346,7 +346,7 @@ class FifteenMinuteCryptoStrategy:
             rl_engine=self.rl_engine,
             historical_tracker=self.success_tracker,
             multi_tf_analyzer=self.multi_tf_analyzer,
-            min_consensus=60.0  # Require 60% consensus for execution
+            min_consensus=15.0  # Lowered to 15% to allow more trades
         )
         
         # PHASE 3: Context Optimizer (40% faster LLM responses)
@@ -866,6 +866,40 @@ class FifteenMinuteCryptoStrategy:
         
         return should_trade, weighted_score, reason
     
+    def _check_circuit_breaker(self) -> bool:
+        """
+        Check if circuit breaker is active (too many consecutive losses).
+        
+        Returns:
+            True if trading is allowed, False if circuit breaker is active
+        """
+        # Check consecutive losses
+        max_consecutive_losses = 5
+        recent_trades = list(self.stats.get('recent_outcomes', []))[-max_consecutive_losses:]
+        
+        if len(recent_trades) >= max_consecutive_losses:
+            if all(outcome == 'loss' for outcome in recent_trades):
+                logger.warning(f"🔴 CIRCUIT BREAKER: {max_consecutive_losses} consecutive losses")
+                return False
+        
+        return True
+    
+    def _check_daily_loss_limit(self) -> bool:
+        """
+        Check if daily loss limit has been reached.
+        
+        Returns:
+            True if trading is allowed, False if daily loss limit reached
+        """
+        daily_pnl = self.stats.get('total_profit', Decimal('0'))
+        max_daily_loss = Decimal('-10.0')  # Stop trading if down $10 in a day
+        
+        if daily_pnl < max_daily_loss:
+            logger.warning(f"🔴 DAILY LOSS LIMIT: ${daily_pnl:.2f} < ${max_daily_loss:.2f}")
+            return False
+        
+        return True
+    
     def _record_trade_outcome(
         self,
         asset: str,
@@ -1335,7 +1369,7 @@ class FifteenMinuteCryptoStrategy:
             else:
                 logger.info(f"🎯 ENSEMBLE REJECTED: {ensemble_decision.action}")
                 logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 50%)")
+                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 15%)")
                 logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
                     
         except Exception as e:

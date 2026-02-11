@@ -227,6 +227,10 @@ class EnsembleDecisionEngine:
             f"Votes: {len(model_votes)}"
         )
         
+        # Log individual model votes for debugging
+        for model_name, vote in model_votes.items():
+            logger.info(f"   {model_name}: {vote.action} ({vote.confidence:.0f}%) - {vote.reasoning[:80]}")
+        
         return ensemble_decision
     
     def _calculate_ensemble(self, model_votes: Dict[str, ModelDecision]) -> EnsembleDecision:
