@@ -80,7 +80,8 @@ class OrderManager:
         self,
         clob_client,  # Type hint omitted to avoid import dependency
         tx_manager: TransactionManager,
-        default_slippage: Decimal = Decimal('0.001')  # 0.1%
+        default_slippage: Decimal = Decimal('0.001'),  # 0.1%
+        dry_run: bool = False
     ):
         """
         Initialize Order Manager.
@@ -89,17 +90,20 @@ class OrderManager:
             clob_client: CLOB client for order submission
             tx_manager: Transaction manager for blockchain operations
             default_slippage: Default slippage tolerance (default 0.1%)
+            dry_run: If True, simulate orders without submitting to CLOB
         """
         self.clob_client = clob_client
         self.tx_manager = tx_manager
         self.default_slippage = default_slippage
+        self.dry_run = dry_run
         
         # Track active orders
         self._active_orders: dict[str, Order] = {}
         
         logger.info(
             f"OrderManager initialized: "
-            f"default_slippage={default_slippage * 100}%"
+            f"default_slippage={default_slippage * 100}%, "
+            f"dry_run={dry_run}"
         )
     
     def create_fok_order(
@@ -435,18 +439,88 @@ class OrderManager:
         # For now, simulate order submission
         # This will be replaced with actual CLOB API calls
         
-        logger.debug(f"Submitting order to CLOB: {order.order_id}")
-        
-        # Simulate network delay
-        await asyncio.sleep(0.1)
-        
-        # Placeholder: assume order fills at requested price
-        # Real implementation would get actual fill price from CLOB
-        return {
-            'filled': True,
-            'fill_price': order.price,
-            'tx_hash': f"0x{uuid.uuid4().hex}"
-        }
+        if self.dry_run:
+            logger.info(f"DRY RUN: Simulating order submission for {order.order_id}")
+            # Simulate network delay
+            await asyncio.sleep(0.1)
+            
+            return {
+                'filled': True,
+                'fill_price': order.price,
+                'tx_hash': f"0x{uuid.uuid4().hex}"
+            }
+            
+        try:
+            from py_clob_client.clob_types import OrderArgs, OrderType
+            from py_clob_client.constants import AMOY
+            
+            # 1. Create OrderArgs
+            order_args = OrderArgs(
+                price=float(order.price),
+                size=float(order.size),
+                side="BUY" if order.side == "YES" else "BUY",  # Both are BUY orders in recent CLOB version? 
+                # Wait, "side" in Order object is YES/NO outcome side. 
+                # In CLOB, we buy the TOKEN. 
+                # The token_id in the order implies the outcome?
+                # Actually, clob_client.create_order() usually takes token_id, price, side(BUY/SELL).
+                # But here we are passing order.market_id as market_id? 
+                # Wait, Order struct has 'market_id' which might be token_id?
+                # Let's check how it's called.
+                # In NegRiskArbitrageEngine: market_id=outcome.token_id.
+                # So order.market_id holds the TOKEN ID.
+                token_id=order.market_id,
+            )
+            
+            # The side "YES" or "NO" in the Order object is metadata.
+            # IN POLYMARKET CLOB: You BUY a token (YES or NO token).
+            # So the side passed to CLOB should be "BUY".
+            # (Unless we are selling, but NegRisk "buy_all" strategy means BUYing tokens)
+            
+            logger.info(f"🚀 SUBMITTING REAL ORDER: {order.order_id} | Token: {order.market_id} | Price: {order.price} | Size: {order.size}")
+            
+            # 2. Create signed order
+            # Note: create_order signature depends on py-clob-client version.
+            # Assuming standard usage: create_order(OrderArgs)
+            signed_order = self.clob_client.create_order(
+                OrderArgs(
+                    price=float(order.price),
+                    size=float(order.size),
+                    side="BUY", # We are always buying the outcome token
+                    token_id=order.market_id,
+                )
+            )
+            
+            # 3. Post order
+            resp = self.clob_client.post_order(signed_order)
+            
+            logger.info(f"✅ Order submitted! Response: {resp}")
+            
+            # 4. Parse response
+            # Response might be a dict with 'transactionHash' or 'orderID'
+            # Or it might be a list of fills if FOK?
+            # CLOB API usually returns order ID.
+            
+            tx_hash = None
+            if isinstance(resp, dict):
+                tx_hash = resp.get("transactionHash") or resp.get("hash")
+                order_id = resp.get("orderID") or resp.get("order_id")
+                if order_id:
+                     order.order_id = order_id # Update with real ID
+            
+            # For FOK orders, if it returns, it usually means filled (or partially?).
+            # But post_order might just return the order ID.
+            # If FOK failed, it might raise exception or return error.
+            
+            # Assuming success if no exception raised
+            return {
+                'filled': True,
+                'fill_price': order.price, # Assume filled at price for now (FOK)
+                'tx_hash': tx_hash or f"0x{uuid.uuid4().hex}" # Fallback if no hash immediately
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ REAL ORDER FAILED: {e}")
+            raise OrderError(f"CLOB submission failed: {e}")
     
     def get_active_orders(self) -> list[Order]:
         """

@@ -741,15 +741,15 @@ class FifteenMinuteCryptoStrategy:
         # Calculate weighted score
         weighted_score = sum(score * weight for _, score, weight in scores)
         
-        # Decision threshold: 60% weighted approval
-        should_trade = weighted_score >= 60.0
+        # Decision threshold: 40% weighted approval (Aggressive Mode: Allow neutral 50% signals)
+        should_trade = weighted_score >= 40.0
         
         reason = f"Learning engines: {' '.join(reasons)} = {weighted_score:.1f}%"
         
         if should_trade:
             logger.info(f"🧠 LEARNING APPROVED: {strategy}/{asset} | {reason}")
         else:
-            logger.warning(f"🧠 LEARNING BLOCKED: {strategy}/{asset} | {reason} (need >= 60%)")
+            logger.warning(f"🧠 LEARNING BLOCKED: {strategy}/{asset} | {reason} (need >= 40%)")
         
         return should_trade, weighted_score, reason
     

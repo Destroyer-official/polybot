@@ -189,7 +189,8 @@ class MainOrchestrator:
         )
         self.order_manager = OrderManager(
             self.clob_client,
-            self.transaction_manager
+            self.transaction_manager,
+            dry_run=config.dry_run
         )
         
         # Initialize safety and risk management
@@ -361,15 +362,16 @@ class MainOrchestrator:
         logger.info("Initializing 15-Minute Crypto Trading Strategy...")
         self.fifteen_min_strategy = FifteenMinuteCryptoStrategy(
             clob_client=self.clob_client,
-            trade_size=10.0,  # Increased to $10 per trade (was $5)
-            take_profit_pct=0.03,  # 3% profit target (lowered from 5% for faster exits)
-            stop_loss_pct=0.02,  # 2% stop loss (tighter control)
-            max_positions=5,  # Increased from 3 to allow more concurrent trades
-            sum_to_one_threshold=1.02,  # Slightly more aggressive (was 1.01)
+            trade_size=25.0,  # INCREASED: Aggressive entry size ($25 vs $10)
+            take_profit_pct=0.04,  # 4% profit target (Optimized for volatility)
+            stop_loss_pct=0.02,  # 2% stop loss (Tight risk control)
+            max_positions=10,  # INCREASED: Allow more concurrent trades
+            sum_to_one_threshold=1.02,
             dry_run=config.dry_run,
-            llm_decision_engine=self.llm_decision_engine  # Enable directional trading
+            llm_decision_engine=self.llm_decision_engine,
+            enable_adaptive_learning=False  # UNLOCKED: Disable cold-start protection for max aggression
         )
-        logger.info("✅ 15-Minute Crypto Strategy enabled (Directional + Latency + Sum-to-One)")
+        logger.info("✅ 15-Minute Crypto Strategy enabled (AGGRESSIVE MODE: Learning Constraints Removed)")
         
         # Timing trackers
         self.last_heartbeat = time.time()
