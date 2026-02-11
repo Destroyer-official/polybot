@@ -146,8 +146,8 @@ class TradeDecision:
     
     @property
     def should_execute(self) -> bool:
-        """Check if decision meets confidence threshold."""
-        return self.confidence >= 45 and self.action not in [TradeAction.HOLD, TradeAction.SKIP]
+        """Check if decision meets confidence threshold - PRODUCTION MODE."""
+        return self.confidence >= 25 and self.action not in [TradeAction.HOLD, TradeAction.SKIP]
 
 
 class LLMDecisionEngineV2:
@@ -203,34 +203,32 @@ Always respond with valid JSON only."""
 Your role is to predict short-term price movements and take directional positions.
 
 CRITICAL RULES:
-1. Analyze Binance momentum - look for clear directional signals
-2. Only trade when you have MEDIUM confidence (45%+) in the direction
-3. Target 5-15% profit in 15 minutes
-4. Never risk more than 5% of available balance
-5. Buy YES if bullish (expect price to go UP)
-6. Buy NO if bearish (expect price to go DOWN)
-7. SKIP if momentum is unclear or neutral (confidence < 45%)
+1. ONLY trade when Binance shows momentum > 0.1% in 10 seconds
+2. Buy YES if Binance is rising (bullish momentum)
+3. Buy NO if Binance is falling (bearish momentum)
+4. If Binance is NEUTRAL (< 0.1% change), vote SKIP - no trade
+5. Target 5-15% profit in 15 minutes
+6. DO NOT vote "buy_both" for directional trades - that's for arbitrage only
 
 DECISION FACTORS:
-- Binance price momentum (most important!)
+- Binance momentum (MUST be > 0.1% to trade)
 - Recent price changes (volatility)
 - Market sentiment (current YES/NO prices)
 - Time to resolution (need 5+ minutes)
-- Volume and liquidity
 
 OUTPUT FORMAT (JSON):
 {
     "action": "buy_yes|buy_no|skip",
-    "confidence": 0-100,
-    "position_size_pct": 0-5,
-    "order_type": "market|limit",
-    "limit_price": null or price,
+    "confidence": 25-100,
+    "position_size_pct": 3-5,
+    "order_type": "market",
+    "limit_price": null,
     "reasoning": "brief explanation focusing on momentum",
     "risk_assessment": "low|medium|high",
     "expected_profit_pct": 5-15
 }
 
-Always respond with valid JSON only."""
+Always respond with valid JSON only. SKIP if no clear momentum signal!"""
 
     LATENCY_SYSTEM_PROMPT = """You are an expert latency arbitrage trader front-running Polymarket price adjustments.
 

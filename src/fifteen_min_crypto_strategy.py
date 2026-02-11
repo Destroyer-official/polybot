@@ -1035,7 +1035,7 @@ class FifteenMinuteCryptoStrategy:
                     
                     # PHASE 3C: Check order book liquidity before sum-to-one entry
                     can_trade_up, liq_reason_up = await self.order_book_analyzer.check_liquidity(
-                        market.up_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.50")
+                        market.up_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.95")
                     )
                     if not can_trade_up:
                         # Allow trade if order book is empty or has high slippage
@@ -1046,7 +1046,7 @@ class FifteenMinuteCryptoStrategy:
                             return False
                     
                     can_trade_dn, liq_reason_dn = await self.order_book_analyzer.check_liquidity(
-                        market.down_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.50")
+                        market.down_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.95")
                     )
                     if not can_trade_dn:
                         # Allow trade if order book is empty or has high slippage
@@ -1142,7 +1142,7 @@ class FifteenMinuteCryptoStrategy:
                 
                 # PHASE 2: Check order book liquidity before trading
                 can_trade, liquidity_reason = await self.order_book_analyzer.check_liquidity(
-                    market.up_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.50")
+                    market.up_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.95")
                 )
                 
                 if not can_trade:
@@ -1186,7 +1186,7 @@ class FifteenMinuteCryptoStrategy:
                 
                 # PHASE 2: Check order book liquidity
                 can_trade, liquidity_reason = await self.order_book_analyzer.check_liquidity(
-                    market.down_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.50")
+                    market.down_token_id, "buy", Decimal("10.0"), max_slippage=Decimal("0.95")
                 )
                 
                 if not can_trade:
@@ -1336,7 +1336,7 @@ class FifteenMinuteCryptoStrategy:
                 shares_needed = adjusted_size / target_price
                 
                 can_trade, liq_reason = await self.order_book_analyzer.check_liquidity(
-                    target_token, "buy", shares_needed, max_slippage=Decimal("0.50")
+                    target_token, "buy", shares_needed, max_slippage=Decimal("0.95")
                 )
                 if not can_trade:
                     if "Excessive slippage" in liq_reason:
@@ -1363,13 +1363,25 @@ class FifteenMinuteCryptoStrategy:
                     await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
                     return True
                 elif ensemble_decision.action == "buy_both":
-                    # buy_both is for arbitrage, not directional - treat as skip
-                    logger.info(f"🎯 ENSEMBLE: buy_both not applicable for directional trade - skipping")
+                    # FIX: LLM votes buy_both - convert to directional by picking cheaper side
+                    logger.info(f"🎯 ENSEMBLE: buy_both detected - converting to directional")
+                    if market.up_price < market.down_price:
+                        logger.info(f"   Choosing YES (cheaper at ${market.up_price:.3f})")
+                        shares = float(adjusted_size / market.up_price)
+                        await self._place_order(market, "UP", market.up_price, shares, strategy="directional")
+                        return True
+                    else:
+                        logger.info(f"   Choosing NO (cheaper at ${market.down_price:.3f})")
+                        shares = float(adjusted_size / market.down_price)
+                        await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
+                        return True
+                else:
+                    logger.info(f"🎯 ENSEMBLE: Unknown action {ensemble_decision.action} - skipping")
                     return False
             else:
                 logger.info(f"🎯 ENSEMBLE REJECTED: {ensemble_decision.action}")
                 logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 15%)")
+                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 5%)")
                 logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
                     
         except Exception as e:

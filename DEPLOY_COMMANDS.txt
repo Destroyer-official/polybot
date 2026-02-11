@@ -1,0 +1,70 @@
+# DEPLOYMENT COMMANDS - COPY AND PASTE THESE
+
+## IMPORTANT: You need to run these commands yourself because:
+## 1. GitHub requires your authentication to push
+## 2. SSH requires your permission to connect to AWS
+
+## STEP 1: Push to GitHub (Run in PowerShell/Git Bash)
+## =====================================================
+git push origin main
+
+## If git push fails with 403 error, authenticate first:
+## git config credential.helper store
+## Then try git push again and enter your GitHub credentials
+
+
+## STEP 2: Deploy to AWS (Run in PowerShell/Git Bash)
+## =====================================================
+ssh -i money.pem ubuntu@35.76.113.47 "cd polymarket-arbitrage-bot && git fetch --all && git reset --hard origin/main && sudo systemctl restart polybot && echo '✅ Bot restarted!' && sudo journalctl -u polybot -n 30"
+
+
+## STEP 3: Monitor Live Logs (Run in PowerShell/Git Bash)
+## =====================================================
+ssh -i money.pem ubuntu@35.76.113.47 "sudo journalctl -u polybot -f"
+
+
+## ALTERNATIVE: Step-by-step deployment
+## =====================================================
+
+## 1. Push code
+git push origin main
+
+## 2. Connect to AWS
+ssh -i money.pem ubuntu@35.76.113.47
+
+## 3. Once connected, run these:
+cd polymarket-arbitrage-bot
+git fetch --all
+git reset --hard origin/main
+sudo systemctl restart polybot
+sudo journalctl -u polybot -f
+
+## Press Ctrl+C to stop watching logs
+
+
+## WHAT TO LOOK FOR IN LOGS:
+## =====================================================
+## ✅ "Found 4 CURRENT 15-minute markets"
+## ✅ "ORDER PLACED SUCCESSFULLY"
+## ✅ "Position tracked"
+## ✅ "TAKE PROFIT"
+## ✅ "Available balance: $X.XX"
+
+
+## TROUBLESHOOTING:
+## =====================================================
+
+## If git push fails:
+## - Make sure you're logged into GitHub
+## - Try: git config --global credential.helper store
+## - Then git push and enter credentials
+
+## If SSH fails:
+## - Check money.pem file exists
+## - Check IP address is correct: 35.76.113.47
+## - Try: chmod 400 money.pem (on Linux/Mac)
+
+## If bot doesn't start:
+## - Check logs: sudo journalctl -u polybot -n 100
+## - Check status: sudo systemctl status polybot
+## - Restart: sudo systemctl restart polybot

@@ -60,7 +60,7 @@ class EnsembleDecisionEngine:
         rl_engine=None,
         historical_tracker=None,
         multi_tf_analyzer=None,
-        min_consensus: float = 60.0
+        min_consensus: float = 5.0  # AGGRESSIVE: 5% for maximum trading
     ):
         """
         Initialize ensemble engine.
@@ -365,8 +365,8 @@ class EnsembleDecisionEngine:
             )
             return False
         
-        # Require minimum confidence (lowered to 25% to allow more trades)
-        if decision.confidence < 25.0:
+        # Require minimum confidence (lowered to 10% for aggressive trading)
+        if decision.confidence < 10.0:
             logger.debug(f"⏭️ Low confidence: {decision.confidence:.1f}%")
             return False
         
