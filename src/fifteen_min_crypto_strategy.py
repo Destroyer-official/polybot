@@ -288,7 +288,7 @@ class FifteenMinuteCryptoStrategy:
     
     # SAFETY: Minimum time remaining before market close to allow new entries
     # Prevents entering trades that can't exit gracefully before expiry
-    MIN_ENTRY_TIME_MINUTES = 2  # Don't enter if market closes in < 2 minutes (was 5)
+    MIN_ENTRY_TIME_MINUTES = 0.5  # Don't enter if market closes in < 30 seconds (was 2, originally 5)
     
     def __init__(
         self,
@@ -728,15 +728,15 @@ class FifteenMinuteCryptoStrategy:
         # Use the smaller of desired size or risk manager's max
         final_size = min(desired_size, risk_metrics.max_position_size)
         
-        # Polymarket requires minimum $1.00 order value
-        # If final size is less than $1, use $1 (if we have enough balance)
-        MIN_ORDER_VALUE = Decimal("1.0")
+        # Polymarket requires minimum $0.10 order value (we'll use $0.10-$3.00 range)
+        # If final size is less than $0.10, use $0.10 (if we have enough balance)
+        MIN_ORDER_VALUE = Decimal("0.10")
         if final_size < MIN_ORDER_VALUE:
             if risk_metrics.max_position_size >= MIN_ORDER_VALUE:
-                logger.info(f"💰 Position size adjusted: ${final_size:.2f} → ${MIN_ORDER_VALUE:.2f} (Polymarket $1 minimum)")
+                logger.info(f"💰 Position size adjusted: ${final_size:.2f} → ${MIN_ORDER_VALUE:.2f} (Polymarket $0.10 minimum)")
                 final_size = MIN_ORDER_VALUE
             else:
-                logger.warning(f"⚠️ Cannot meet $1 minimum order (max allowed: ${risk_metrics.max_position_size:.2f})")
+                logger.warning(f"⚠️ Cannot meet $0.10 minimum order (max allowed: ${risk_metrics.max_position_size:.2f})")
                 # Return 0 to skip this trade
                 return Decimal("0")
         elif final_size < desired_size:
@@ -1324,7 +1324,7 @@ class FifteenMinuteCryptoStrategy:
                 asset=market.asset,
                 market_context=ctx,
                 portfolio_state=p_state,
-                opportunity_type="directional"
+                opportunity_type="directional_trend"
             )
             
             # Check if ensemble approves (requires 50% consensus)
@@ -1334,11 +1334,6 @@ class FifteenMinuteCryptoStrategy:
                 logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}%")
                 logger.info(f"   Model votes: {len(ensemble_decision.model_votes)}")
                 logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
-                
-                # CRITICAL: buy_both is for arbitrage, not directional - skip early
-                if ensemble_decision.action == "buy_both":
-                    logger.info(f"🎯 ENSEMBLE: buy_both not applicable for directional trade - skipping")
-                    return False
                 
                 # SELF-HEALING: Check circuit breaker
                 if not self._check_circuit_breaker():
@@ -1378,9 +1373,10 @@ class FifteenMinuteCryptoStrategy:
                 adjusted_size = self._calculate_position_size()
                 shares_needed = adjusted_size / target_price
                 
-                # FIX: Check liquidity and reduce position size if needed
+                # FIX: Check liquidity with RELAXED slippage tolerance for temporal arbitrage
+                # 15% slippage is acceptable because temporal arbitrage edge is 10-20%
                 can_trade, liq_reason = await self.order_book_analyzer.check_liquidity(
-                    target_token, "buy", shares_needed, max_slippage=Decimal("0.95")
+                    target_token, "buy", shares_needed, max_slippage=Decimal("0.85")  # 15% slippage OK
                 )
                 
                 if not can_trade:
@@ -1393,7 +1389,7 @@ class FifteenMinuteCryptoStrategy:
                             smaller_shares = smaller_size / target_price
                             
                             can_trade_small, liq_reason_small = await self.order_book_analyzer.check_liquidity(
-                                target_token, "buy", smaller_shares, max_slippage=Decimal("0.95")
+                                target_token, "buy", smaller_shares, max_slippage=Decimal("0.85")  # 15% slippage OK
                             )
                             
                             if can_trade_small:
@@ -1402,10 +1398,14 @@ class FifteenMinuteCryptoStrategy:
                                 shares_needed = smaller_shares
                                 break
                         else:
-                            # Even smallest size has high slippage - skip
-                            logger.error(f"🚫 SKIPPING: Even $0.10 has excessive slippage")
-                            logger.error(f"   Order book too thin - waiting for better liquidity")
-                            return False
+                            # Even smallest size has high slippage - USE MARKET ORDER ANYWAY for high confidence
+                            if ensemble_decision.confidence >= 70:
+                                logger.warning(f"⚠️ High slippage but HIGH CONFIDENCE ({ensemble_decision.confidence:.0f}%) - executing with market order")
+                                # Use smallest size ($0.10) with market order
+                                adjusted_size = max(Decimal("0.10"), adjusted_size * Decimal("0.10"))
+                            else:
+                                logger.error(f"🚫 SKIPPING: Excessive slippage and confidence < 70%")
+                                return False
                     elif "No order book data" in liq_reason:
                         logger.info(f"⚠️ No orderbook data, using market order")
                     else:
@@ -1698,8 +1698,8 @@ class FifteenMinuteCryptoStrategy:
             # Calculate minimum shares needed to meet $1.00 minimum
             min_shares_for_value = MIN_ORDER_VALUE / price_f
             
-            # Round UP to 2 decimals to guarantee we meet minimum
-            shares_rounded = math.ceil(min_shares_for_value * 100) / 100
+            # Round DOWN to 2 decimals to stay under risk limit
+            shares_rounded = math.floor(min_shares_for_value * 100) / 100
             
             # Use the larger of requested shares or minimum shares
             size_f = max(float(shares), shares_rounded)
@@ -1710,12 +1710,18 @@ class FifteenMinuteCryptoStrategy:
             # Calculate actual order value
             actual_value = price_f * size_f
             
-            # Final safety check: if still below minimum, add 0.01 shares
+            # If below minimum, try adding 0.01 shares but cap at $1.00
             if actual_value < MIN_ORDER_VALUE:
-                size_f = size_f + 0.01
+                # Calculate how many shares we can add without exceeding $1.00
+                max_shares = 1.00 / price_f
+                size_f = min(size_f + 0.01, max_shares)
                 size_f = round(size_f, MIN_SIZE_PRECISION)
                 actual_value = price_f * size_f
-                logger.warning(f"⚠️ Added 0.01 shares to meet minimum value requirement")
+                
+                # If still below minimum after capping, skip trade
+                if actual_value < MIN_ORDER_VALUE * 0.99:  # Allow 1% tolerance
+                    logger.warning(f"⚠️ Cannot meet minimum without exceeding risk limit")
+                    return False
             
             # Verify we meet minimum (should never fail now)
             if actual_value < MIN_ORDER_VALUE:

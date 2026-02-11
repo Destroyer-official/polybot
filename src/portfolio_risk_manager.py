@@ -148,8 +148,11 @@ class PortfolioRiskManager:
         max_position = min(max_position_from_pct, max_position_from_heat)
         
         # If max_position is less than $1 but we have at least $1 in capital, allow $1 trades
-        if max_position < Decimal('1.0') and self.current_capital >= Decimal('1.0'):
-            max_position = min(Decimal('1.0'), self.current_capital * Decimal('0.30'))  # Max 30% for small balances
+        # For small balances, allow up to $3 per trade to improve execution
+        if max_position < Decimal('3.0') and self.current_capital >= Decimal('3.0'):
+            max_position = min(Decimal('3.0'), self.current_capital * Decimal('0.50'))  # Max 50% for small balances
+        elif max_position < Decimal('1.0') and self.current_capital >= Decimal('1.0'):
+            max_position = min(Decimal('1.0'), self.current_capital * Decimal('0.30'))  # Max 30% for very small balances
         
         # Check constraints
         can_trade = True
