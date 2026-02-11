@@ -273,7 +273,7 @@ class LiveBotMonitor:
                 table.add_row(f"{model}", "[dim]waiting...[/dim]", "[dim]-[/dim]")
         
         # Consensus row
-        consensus_color = "green" if self.last_consensus >= 15 else "red"
+        consensus_color = "green" if self.last_consensus >= 10 else "red"
         table.add_row("", "", "")
         table.add_row(
             "[bold]Consensus[/bold]",
