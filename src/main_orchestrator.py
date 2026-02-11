@@ -399,7 +399,7 @@ class MainOrchestrator:
         # OPTIMIZATION: Dynamic scan interval (better resource usage)
         self._base_scan_interval = config.scan_interval_seconds
         self._current_scan_interval = config.scan_interval_seconds
-        self._volatility_threshold = Decimal("0.02")  # 2% volatility
+        self._volatility_threshold = Decimal("0.05")  # 5% volatility (increased from 2% to reduce false triggers)
         
         # Load persisted state
         self._load_state()
@@ -686,9 +686,10 @@ class MainOrchestrator:
             if count > 0:
                 avg_volatility = total_volatility / count
                 
-                # High volatility = faster scanning
+                # High volatility = faster scanning (but not too fast)
                 if avg_volatility > self._volatility_threshold:
-                    self._current_scan_interval = max(0.5, self._base_scan_interval * 0.5)
+                    # Reduce interval by 25% (not 50%) and minimum 2 seconds (not 0.5)
+                    self._current_scan_interval = max(1.5, self._base_scan_interval * 0.75)
                     logger.debug(f"🔥 High volatility ({avg_volatility*100:.1f}%), scan interval: {self._current_scan_interval}s")
                 else:
                     self._current_scan_interval = self._base_scan_interval

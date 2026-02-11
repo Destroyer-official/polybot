@@ -61,7 +61,7 @@ class Config:
     
     # Operational
     dry_run: bool = False
-    scan_interval_seconds: int = 2
+    scan_interval_seconds: int = 2  # Increased from 2 to 5 seconds (more sustainable)
     heartbeat_interval_seconds: int = 60
     
     # Chain ID
@@ -245,7 +245,7 @@ class Config:
             
             # Operational
             dry_run=os.getenv("DRY_RUN", "false").lower() in ("true", "1", "yes"),
-            scan_interval_seconds=int(os.getenv("SCAN_INTERVAL_SECONDS", "2")),
+            scan_interval_seconds=int(os.getenv("SCAN_INTERVAL_SECONDS", "2")),  # Increased default from 2 to 5
             heartbeat_interval_seconds=int(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "60")),
             
             # Chain ID
