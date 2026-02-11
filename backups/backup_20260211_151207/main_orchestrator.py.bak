@@ -323,7 +323,7 @@ class MainOrchestrator:
         logger.info("Initializing LLM Decision Engine V2 (Perfect Edition)...")
         self.llm_decision_engine = LLMDecisionEngineV2(
             nvidia_api_key=config.nvidia_api_key,
-            min_confidence_threshold=45.0,  # 45% threshold - balanced between opportunity and safety
+            min_confidence_threshold=50.0,  # Lowered to 50% for more trades (was 60%)
             max_position_pct=5.0,  # Max 5% of balance per trade
             decision_timeout=5.0,  # 5 second timeout for LLM calls
             enable_chain_of_thought=True
@@ -360,25 +360,16 @@ class MainOrchestrator:
         # 15-MINUTE CRYPTO STRATEGY - BTC/ETH Up/Down Trading
         # ============================================================
         logger.info("Initializing 15-Minute Crypto Trading Strategy...")
-        
-        # Dynamic position sizing based on available balance
-        # Use 30% of balance per trade (aggressive but safe)
-        # Start with config target_balance, will auto-adjust based on actual balance
-        initial_trade_size = max(1.0, float(config.target_balance) * 0.30)
-        logger.info(f"💰 Initial trade size: ${initial_trade_size:.2f} per trade (30% of ${config.target_balance:.2f} balance)")
-        logger.info(f"💰 Risk manager will dynamically adjust based on actual balance")
-        
         self.fifteen_min_strategy = FifteenMinuteCryptoStrategy(
             clob_client=self.clob_client,
-            trade_size=initial_trade_size,  # DYNAMIC: Will be adjusted by risk manager
-            take_profit_pct=0.005,  # 0.5% profit target (Realistic for 15-min markets - prices move slowly)
-            stop_loss_pct=0.01,  # 1% stop loss (Tight risk control)
+            trade_size=25.0,  # INCREASED: Aggressive entry size ($25 vs $10)
+            take_profit_pct=0.04,  # 4% profit target (Optimized for volatility)
+            stop_loss_pct=0.02,  # 2% stop loss (Tight risk control)
             max_positions=10,  # INCREASED: Allow more concurrent trades
             sum_to_one_threshold=1.02,
             dry_run=config.dry_run,
             llm_decision_engine=self.llm_decision_engine,
-            enable_adaptive_learning=False,  # CRITICAL FIX: Disable (breaks dynamic take profit)
-            initial_capital=float(config.target_balance)  # Pass balance for risk management
+            enable_adaptive_learning=False  # UNLOCKED: Disable cold-start protection for max aggression
         )
         logger.info("✅ 15-Minute Crypto Strategy enabled (AGGRESSIVE MODE: Learning Constraints Removed)")
         

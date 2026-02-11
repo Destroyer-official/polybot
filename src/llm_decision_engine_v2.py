@@ -33,7 +33,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
@@ -147,7 +147,7 @@ class TradeDecision:
     @property
     def should_execute(self) -> bool:
         """Check if decision meets confidence threshold."""
-        return self.confidence >= 60 and self.action not in [TradeAction.HOLD, TradeAction.SKIP]
+        return self.confidence >= 45 and self.action not in [TradeAction.HOLD, TradeAction.SKIP]
 
 
 class LLMDecisionEngineV2:
@@ -176,7 +176,7 @@ Your role is to identify and execute risk-free arbitrage trades.
 CRITICAL RULES:
 1. For arbitrage: YES + NO must be < $0.97 to be profitable after 3% fees
 2. Never risk more than 5% of available balance
-3. Only trade when confidence is HIGH (70%+)
+3. Only trade when confidence is MEDIUM (40%+)
 4. Consider liquidity - need enough depth to execute both sides
 5. Prefer FOK orders to avoid partial fills
 
@@ -203,13 +203,13 @@ Always respond with valid JSON only."""
 Your role is to predict short-term price movements and take directional positions.
 
 CRITICAL RULES:
-1. Analyze Binance momentum - is crypto price trending up or down?
-2. Consider time remaining - need enough time for move to play out
+1. Analyze Binance momentum - look for clear directional signals
+2. Only trade when you have MEDIUM confidence (45%+) in the direction
 3. Target 5-15% profit in 15 minutes
-4. Only trade when confidence is HIGH (60%+)
-5. Never risk more than 5% of available balance
-6. Buy YES if bullish (expect price to go UP)
-7. Buy NO if bearish (expect price to go DOWN)
+4. Never risk more than 5% of available balance
+5. Buy YES if bullish (expect price to go UP)
+6. Buy NO if bearish (expect price to go DOWN)
+7. SKIP if momentum is unclear or neutral (confidence < 45%)
 
 DECISION FACTORS:
 - Binance price momentum (most important!)
@@ -240,7 +240,7 @@ CRITICAL RULES:
 1. Binance moves FIRST, Polymarket follows with 1-2 minute lag
 2. Strong Binance momentum (>0.1% in 10s) = high probability trade
 3. Target 2-5% profit by front-running the adjustment
-4. Only trade when confidence is HIGH (70%+)
+4. Only trade when confidence is MEDIUM (40%+)
 5. Use MARKET orders for speed
 6. Exit quickly - hold time < 5 minutes
 
@@ -290,7 +290,7 @@ Always respond with valid JSON only."""
         self.enable_chain_of_thought = enable_chain_of_thought
         
         # Initialize OpenAI-compatible client for NVIDIA API
-        self.client = OpenAI(
+        self.client = AsyncOpenAI(
             base_url=nvidia_api_url,
             api_key=nvidia_api_key
         )
@@ -511,7 +511,7 @@ DECISION CRITERIA:
         last_error = None
         for model in models_to_try:
             try:
-                completion = self.client.chat.completions.create(
+                completion = await self.client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": system_prompt},

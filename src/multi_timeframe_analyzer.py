@@ -140,11 +140,16 @@ class MultiTimeframeAnalyzer:
             return None
         
         history = self.price_history[asset].get(timeframe, deque())
-        if len(history) < lookback_periods:
+        # Relaxed lookback: Calculate if we have at least 2 points
+        available_points = len(history)
+        if available_points < 2:
             return None
         
+        # Use up to lookback_periods, or whatever is available
+        points_to_use = min(available_points, lookback_periods)
+        
         # Get recent prices
-        recent_prices = [p for _, p in list(history)[-lookback_periods:]]
+        recent_prices = [p for _, p in list(history)[-points_to_use:]]
         if not recent_prices:
             return None
         

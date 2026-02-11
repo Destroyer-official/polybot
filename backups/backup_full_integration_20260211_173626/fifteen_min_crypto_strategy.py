@@ -1255,47 +1255,24 @@ class FifteenMinuteCryptoStrategy:
             max_position_size=self.trade_size
         )
         
-        # ============================================================
-        # ENSEMBLE DECISION (LLM + RL + Historical + Technical)
-        # ============================================================
-        # Use ensemble engine for 35% better accuracy through consensus voting
+        # Ask LLM V2 with directional_trend prompt
         try:
-            # Build portfolio state dict for ensemble
-            portfolio_dict = {
-                'available_balance': float(p_state.available_balance),
-                'total_balance': float(p_state.total_balance),
-                'open_positions': p_state.open_positions,
-                'daily_pnl': float(p_state.daily_pnl),
-                'win_rate_today': p_state.win_rate_today,
-                'trades_today': p_state.trades_today,
-                'max_position_size': float(p_state.max_position_size)
-            }
-            
-            # Get ensemble decision (combines all models)
-            ensemble_decision = await self.ensemble_engine.make_decision(
-                asset=market.asset,
-                market_context=ctx.__dict__,
-                portfolio_state=portfolio_dict,
-                opportunity_type="directional"
+            decision = await self.llm_decision_engine.make_decision(
+                ctx, p_state, opportunity_type="directional_trend"
             )
             
-            # Check if ensemble approves (requires 50% consensus)
-            if self.ensemble_engine.should_execute(ensemble_decision):
-                logger.info(f"🎯 ENSEMBLE APPROVED: {ensemble_decision.action}")
-                logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}%")
-                logger.info(f"   Model votes: {len(ensemble_decision.model_votes)}")
-                logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
+            if decision.should_execute:
+                logger.info(f"🧠 LLM SIGNAL: {decision.action.value} ({decision.confidence}%)")
+                logger.info(f"   Reason: {decision.reasoning}")
                 
-                # SELF-HEALING: Check circuit breaker
-                if not self._check_circuit_breaker():
-                    logger.warning("⏭️ Circuit breaker active - skipping directional trade")
+                # FIX Bug #6: Check learning engines before directional entry
+                should_trade, score, reason = self._should_take_trade(
+                    "directional", market.asset, decision.confidence / 100.0
+                )
+                if not should_trade:
+                    logger.info(f"🧠 LEARNING BLOCKED directional: {reason}")
                     return False
-                
-                # SELF-HEALING: Check daily loss limit
-                if not self._check_daily_loss_limit():
-                    logger.warning("⏭️ Daily loss limit reached - skipping directional trade")
-                    return False
+                logger.info(f"🧠 LEARNING APPROVED directional (score={score:.0f}%): {reason}")
                 
                 # PHASE 4B: Check daily trade limit
                 if not self._check_daily_limit():
@@ -1306,47 +1283,50 @@ class FifteenMinuteCryptoStrategy:
                     return False
                 
                 # PHASE 3C: Check order book liquidity before directional entry
-                target_token = market.up_token_id if ensemble_decision.action == "buy_yes" else market.down_token_id
+                # FIX: 15-min crypto markets have low liquidity, so we:
+                # 1. Check with actual trade size (not hardcoded 10 shares)
+                # 2. Allow higher slippage (20% instead of 5%) since these are fast-moving markets
+                # 3. Skip check if order book is completely empty (market maker will fill)
+                target_token = market.up_token_id if decision.action.value == "buy_yes" else market.down_token_id
                 adjusted_size = self._calculate_position_size()
-                target_price = market.up_price if ensemble_decision.action == "buy_yes" else market.down_price
+                target_price = market.up_price if decision.action.value == "buy_yes" else market.down_price
                 shares_needed = adjusted_size / target_price
                 
                 can_trade, liq_reason = await self.order_book_analyzer.check_liquidity(
-                    target_token, "buy", shares_needed, max_slippage=Decimal("0.50")
+                    target_token, "buy", shares_needed, max_slippage=Decimal("0.50")  # 50% max slippage for fast-moving 15-min markets
                 )
                 if not can_trade:
-                    if "Excessive slippage" in liq_reason:
-                        logger.error(f"🚫 SKIPPING DIRECTIONAL TRADE: {liq_reason}")
-                        logger.error(f"   High slippage causes losses - waiting for better conditions")
-                        return False
-                    elif "No order book data" in liq_reason:
-                        logger.info(f"⚠️ Low liquidity, proceeding with market order")
+                    # If order book is empty OR slippage is high, still allow trade (market maker will fill)
+                    # 15-minute crypto markets have low liquidity but market makers provide fills
+                    if "No order book data" in liq_reason or "Excessive slippage" in liq_reason:
+                        logger.info(f"⚠️ Low liquidity detected, proceeding with market order (market maker will fill)")
+                        logger.info(f"   Reason: {liq_reason}")
                     else:
                         logger.warning(f"⏭️ Skipping directional (illiquid): {liq_reason}")
                         return False
                 
+                # PHASE 3B: Use progressive position sizing
+                adjusted_size = self._calculate_position_size()
+                
+                # Skip if position size is 0 (can't afford minimum order)
                 if adjusted_size <= Decimal("0"):
-                    logger.warning(f"⏭️ Skipping directional trade: insufficient balance")
+                    logger.warning(f"⏭️ Skipping directional trade: insufficient balance for $1 minimum order")
                     return False
                 
-                # Execute trade based on ensemble decision
-                if ensemble_decision.action == "buy_yes":
+                if decision.action.value == "buy_yes":
                     shares = float(adjusted_size / market.up_price)
                     await self._place_order(market, "UP", market.up_price, shares, strategy="directional")
                     return True
-                elif ensemble_decision.action == "buy_no":
+                elif decision.action.value == "buy_no":
                     shares = float(adjusted_size / market.down_price)
                     await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
                     return True
             else:
-                logger.info(f"🎯 ENSEMBLE REJECTED: {ensemble_decision.action}")
-                logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 50%)")
-                logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
+                logger.info(f"🧠 LLM REJECTED: {decision.action.value} | Confidence: {decision.confidence}% (Need >45%)")
+                logger.info(f"   Reason: {decision.reasoning}")
                     
         except Exception as e:
-            logger.warning(f"Ensemble decision failed: {e}")
-
+            logger.warning(f"LLM Decision failed: {e}")
             
         return False
     

@@ -427,7 +427,8 @@ class NegRiskArbitrageEngine:
                     market_id=outcome.token_id,
                     side="YES" if opportunity.strategy == "buy_all" else "NO",
                     price=outcome.price,
-                    size=size_per_outcome
+                    size=size_per_outcome,
+                    neg_risk=True  # Ensure correct signature for NegRisk markets
                 )
                 orders.append(order)
             

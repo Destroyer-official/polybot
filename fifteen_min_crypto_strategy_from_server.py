@@ -358,12 +358,6 @@ class FifteenMinuteCryptoStrategy:
         # Active positions
         self.positions: Dict[str, Position] = {}
         
-        # Position persistence file
-        self.positions_file = "data/active_positions.json"
-        
-        # Load any existing positions from disk
-        self._load_positions()
-        
         # Track last LLM check time per asset to avoid rate limits
         self.last_llm_check: Dict[str, datetime] = {}
         
@@ -466,71 +460,6 @@ class FifteenMinuteCryptoStrategy:
         logger.info(f"  📋 Daily Trade Limit: {self.max_daily_trades}")
         logger.info(f"  🎯 Per-Asset Limit: {self.max_positions_per_asset} positions")
         logger.info("=" * 80)
-    
-    def _load_positions(self):
-        """Load positions from disk to survive restarts."""
-        import json
-        import os
-        
-        try:
-            if os.path.exists(self.positions_file):
-                with open(self.positions_file, 'r') as f:
-                    data = json.load(f)
-                    
-                for token_id, pos_data in data.items():
-                    self.positions[token_id] = Position(
-                        token_id=pos_data['token_id'],
-                        side=pos_data['side'],
-                        entry_price=Decimal(str(pos_data['entry_price'])),
-                        size=Decimal(str(pos_data['size'])),
-                        entry_time=datetime.fromisoformat(pos_data['entry_time']),
-                        market_id=pos_data['market_id'],
-                        asset=pos_data['asset'],
-                        strategy=pos_data.get('strategy', 'unknown'),
-                        neg_risk=pos_data.get('neg_risk', True),
-                        highest_price=Decimal(str(pos_data.get('highest_price', pos_data['entry_price'])))
-                    )
-                
-                logger.info(f"📂 Loaded {len(self.positions)} positions from disk")
-                for token_id, pos in self.positions.items():
-                    logger.info(f"   - {pos.asset} {pos.side}: entry=${pos.entry_price}, size={pos.size}")
-            else:
-                logger.info("📂 No saved positions found (clean start)")
-        except Exception as e:
-            logger.error(f"Failed to load positions: {e}")
-            self.positions = {}
-    
-    def _save_positions(self):
-        """Save positions to disk for persistence across restarts."""
-        import json
-        import os
-        
-        try:
-            # Create data directory if it doesn't exist
-            os.makedirs(os.path.dirname(self.positions_file), exist_ok=True)
-            
-            # Convert positions to JSON-serializable format
-            data = {}
-            for token_id, pos in self.positions.items():
-                data[token_id] = {
-                    'token_id': pos.token_id,
-                    'side': pos.side,
-                    'entry_price': str(pos.entry_price),
-                    'size': str(pos.size),
-                    'entry_time': pos.entry_time.isoformat(),
-                    'market_id': pos.market_id,
-                    'asset': pos.asset,
-                    'strategy': pos.strategy,
-                    'neg_risk': pos.neg_risk,
-                    'highest_price': str(pos.highest_price)
-                }
-            
-            with open(self.positions_file, 'w') as f:
-                json.dump(data, f, indent=2)
-                
-            logger.debug(f"💾 Saved {len(self.positions)} positions to disk")
-        except Exception as e:
-            logger.error(f"Failed to save positions: {e}")
     
     async def start(self):
         """Start the strategy (including Binance feed)."""
@@ -1255,47 +1184,24 @@ class FifteenMinuteCryptoStrategy:
             max_position_size=self.trade_size
         )
         
-        # ============================================================
-        # ENSEMBLE DECISION (LLM + RL + Historical + Technical)
-        # ============================================================
-        # Use ensemble engine for 35% better accuracy through consensus voting
+        # Ask LLM V2 with directional_trend prompt
         try:
-            # Build portfolio state dict for ensemble
-            portfolio_dict = {
-                'available_balance': float(p_state.available_balance),
-                'total_balance': float(p_state.total_balance),
-                'open_positions': p_state.open_positions,
-                'daily_pnl': float(p_state.daily_pnl),
-                'win_rate_today': p_state.win_rate_today,
-                'trades_today': p_state.trades_today,
-                'max_position_size': float(p_state.max_position_size)
-            }
-            
-            # Get ensemble decision (combines all models)
-            ensemble_decision = await self.ensemble_engine.make_decision(
-                asset=market.asset,
-                market_context=ctx.__dict__,
-                portfolio_state=portfolio_dict,
-                opportunity_type="directional"
+            decision = await self.llm_decision_engine.make_decision(
+                ctx, p_state, opportunity_type="directional_trend"
             )
             
-            # Check if ensemble approves (requires 50% consensus)
-            if self.ensemble_engine.should_execute(ensemble_decision):
-                logger.info(f"🎯 ENSEMBLE APPROVED: {ensemble_decision.action}")
-                logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}%")
-                logger.info(f"   Model votes: {len(ensemble_decision.model_votes)}")
-                logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
+            if decision.should_execute:
+                logger.info(f"🧠 LLM SIGNAL: {decision.action.value} ({decision.confidence}%)")
+                logger.info(f"   Reason: {decision.reasoning}")
                 
-                # SELF-HEALING: Check circuit breaker
-                if not self._check_circuit_breaker():
-                    logger.warning("⏭️ Circuit breaker active - skipping directional trade")
+                # FIX Bug #6: Check learning engines before directional entry
+                should_trade, score, reason = self._should_take_trade(
+                    "directional", market.asset, decision.confidence / 100.0
+                )
+                if not should_trade:
+                    logger.info(f"🧠 LEARNING BLOCKED directional: {reason}")
                     return False
-                
-                # SELF-HEALING: Check daily loss limit
-                if not self._check_daily_loss_limit():
-                    logger.warning("⏭️ Daily loss limit reached - skipping directional trade")
-                    return False
+                logger.info(f"🧠 LEARNING APPROVED directional (score={score:.0f}%): {reason}")
                 
                 # PHASE 4B: Check daily trade limit
                 if not self._check_daily_limit():
@@ -1306,47 +1212,50 @@ class FifteenMinuteCryptoStrategy:
                     return False
                 
                 # PHASE 3C: Check order book liquidity before directional entry
-                target_token = market.up_token_id if ensemble_decision.action == "buy_yes" else market.down_token_id
+                # FIX: 15-min crypto markets have low liquidity, so we:
+                # 1. Check with actual trade size (not hardcoded 10 shares)
+                # 2. Allow higher slippage (20% instead of 5%) since these are fast-moving markets
+                # 3. Skip check if order book is completely empty (market maker will fill)
+                target_token = market.up_token_id if decision.action.value == "buy_yes" else market.down_token_id
                 adjusted_size = self._calculate_position_size()
-                target_price = market.up_price if ensemble_decision.action == "buy_yes" else market.down_price
+                target_price = market.up_price if decision.action.value == "buy_yes" else market.down_price
                 shares_needed = adjusted_size / target_price
                 
                 can_trade, liq_reason = await self.order_book_analyzer.check_liquidity(
-                    target_token, "buy", shares_needed, max_slippage=Decimal("0.50")
+                    target_token, "buy", shares_needed, max_slippage=Decimal("0.50")  # 50% max slippage for fast-moving 15-min markets
                 )
                 if not can_trade:
-                    if "Excessive slippage" in liq_reason:
-                        logger.error(f"🚫 SKIPPING DIRECTIONAL TRADE: {liq_reason}")
-                        logger.error(f"   High slippage causes losses - waiting for better conditions")
-                        return False
-                    elif "No order book data" in liq_reason:
-                        logger.info(f"⚠️ Low liquidity, proceeding with market order")
+                    # If order book is empty OR slippage is high, still allow trade (market maker will fill)
+                    # 15-minute crypto markets have low liquidity but market makers provide fills
+                    if "No order book data" in liq_reason or "Excessive slippage" in liq_reason:
+                        logger.info(f"⚠️ Low liquidity detected, proceeding with market order (market maker will fill)")
+                        logger.info(f"   Reason: {liq_reason}")
                     else:
                         logger.warning(f"⏭️ Skipping directional (illiquid): {liq_reason}")
                         return False
                 
+                # PHASE 3B: Use progressive position sizing
+                adjusted_size = self._calculate_position_size()
+                
+                # Skip if position size is 0 (can't afford minimum order)
                 if adjusted_size <= Decimal("0"):
-                    logger.warning(f"⏭️ Skipping directional trade: insufficient balance")
+                    logger.warning(f"⏭️ Skipping directional trade: insufficient balance for $1 minimum order")
                     return False
                 
-                # Execute trade based on ensemble decision
-                if ensemble_decision.action == "buy_yes":
+                if decision.action.value == "buy_yes":
                     shares = float(adjusted_size / market.up_price)
                     await self._place_order(market, "UP", market.up_price, shares, strategy="directional")
                     return True
-                elif ensemble_decision.action == "buy_no":
+                elif decision.action.value == "buy_no":
                     shares = float(adjusted_size / market.down_price)
                     await self._place_order(market, "DOWN", market.down_price, shares, strategy="directional")
                     return True
             else:
-                logger.info(f"🎯 ENSEMBLE REJECTED: {ensemble_decision.action}")
-                logger.info(f"   Confidence: {ensemble_decision.confidence:.1f}%")
-                logger.info(f"   Consensus: {ensemble_decision.consensus_score:.1f}% (need >= 50%)")
-                logger.info(f"   Reasoning: {ensemble_decision.reasoning[:100]}...")
+                logger.info(f"🧠 LLM REJECTED: {decision.action.value} | Confidence: {decision.confidence}% (Need >45%)")
+                logger.info(f"   Reason: {decision.reasoning}")
                     
         except Exception as e:
-            logger.warning(f"Ensemble decision failed: {e}")
-
+            logger.warning(f"LLM Decision failed: {e}")
             
         return False
     
@@ -1514,10 +1423,6 @@ class FifteenMinuteCryptoStrategy:
             if token_id in self.positions:
                 del self.positions[token_id]
                 logger.info(f"✅ Position {token_id[:16]}... removed from tracking")
-        
-        # Save positions to disk after any changes
-        if positions_to_close:
-            self._save_positions()
     
     async def _place_order(
         self,
@@ -1528,7 +1433,7 @@ class FifteenMinuteCryptoStrategy:
         strategy: str = "unknown"  # Track which strategy placed this order
     ) -> bool:
         """
-        Place a buy order with comprehensive validation and error handling.
+        Place a buy order.
         
         Args:
             market: Target market
@@ -1546,9 +1451,18 @@ class FifteenMinuteCryptoStrategy:
         logger.info(f"   Market: {market.question[:50]}...")
         logger.info(f"   Side: {side}")
         logger.info(f"   Price: ${price}")
-        logger.info(f"   Shares (requested): {shares:.2f}")
-        logger.info(f"   Value (requested): ${float(price) * shares:.2f}")
+        logger.info(f"   Shares: {shares:.2f}")
+        logger.info(f"   Value: ${float(price) * shares:.2f}")
         logger.info("=" * 80)
+        
+        # PHASE 4A: Check portfolio risk manager
+        risk_metrics = self.risk_manager.check_can_trade(
+            proposed_size=Decimal(str(float(price) * shares)),
+            market_id=market.market_id
+        )
+        if not risk_metrics.can_trade:
+            logger.warning(f"🛡️ RISK MANAGER BLOCKED: {risk_metrics.reason}")
+            return False
         
         if self.dry_run:
             logger.info("DRY RUN: Order simulated (not placed)")
@@ -1568,8 +1482,6 @@ class FifteenMinuteCryptoStrategy:
             self.daily_trade_count += 1
             # PHASE 4A: Register position with risk manager
             self.risk_manager.add_position(market.market_id, side, price, Decimal(str(shares)))
-            # Save position to disk
-            self._save_positions()
             return True
         
         try:
@@ -1578,184 +1490,104 @@ class FifteenMinuteCryptoStrategy:
             from py_clob_client.order_builder.constants import BUY
             import math
             
-            # ============================================================
-            # STEP 1: Calculate actual order size with all validations
-            # ============================================================
-            
             price_f = float(price)
-            if price_f <= 0:
-                logger.error("❌ Price is 0 or negative, cannot place order")
-                return False
+            size_f = float(shares)
             
-            # Polymarket requirements
-            MIN_ORDER_VALUE = 1.00  # Minimum $1.00 order value
-            MIN_SIZE_PRECISION = 2  # Size must be 2 decimals
+            # Polymarket minimum order value is $1.00
+            MIN_ORDER_VALUE = 1.00
+            order_value = price_f * size_f
             
-            # Calculate minimum shares needed to meet $1.00 minimum
-            min_shares_for_value = MIN_ORDER_VALUE / price_f
-            
-            # Round UP to 2 decimals to guarantee we meet minimum
-            shares_rounded = math.ceil(min_shares_for_value * 100) / 100
-            
-            # Use the larger of requested shares or minimum shares
-            size_f = max(float(shares), shares_rounded)
-            
-            # Round to 2 decimals (Polymarket's size precision)
-            size_f = round(size_f, MIN_SIZE_PRECISION)
-            
-            # Calculate actual order value
-            actual_value = price_f * size_f
-            
-            # Final safety check: if still below minimum, add 0.01 shares
-            if actual_value < MIN_ORDER_VALUE:
-                size_f = size_f + 0.01
-                size_f = round(size_f, MIN_SIZE_PRECISION)
-                actual_value = price_f * size_f
-                logger.warning(f"⚠️ Added 0.01 shares to meet minimum value requirement")
-            
-            # Verify we meet minimum (should never fail now)
-            if actual_value < MIN_ORDER_VALUE:
-                logger.error(f"❌ Cannot meet minimum order value: ${actual_value:.4f} < ${MIN_ORDER_VALUE}")
-                return False
-            
-            logger.info(f"📊 Final order parameters:")
-            logger.info(f"   Size: {size_f:.2f} shares")
-            logger.info(f"   Price: ${price_f:.4f}")
-            logger.info(f"   Total Value: ${actual_value:.4f}")
-            
-            # ============================================================
-            # STEP 2: Check portfolio risk manager with ACTUAL size
-            # ============================================================
-            
-            risk_metrics = self.risk_manager.check_can_trade(
-                proposed_size=Decimal(str(actual_value)),
-                market_id=market.market_id
-            )
-            if not risk_metrics.can_trade:
-                logger.warning(f"🛡️ RISK MANAGER BLOCKED: {risk_metrics.reason}")
-                return False
-            
-            # ============================================================
-            # STEP 3: Check actual balance before placing order
-            # ============================================================
-            
-            try:
-                from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-                balance_info = self.clob_client.get_balance_allowance(params)
-                
-                if isinstance(balance_info, dict):
-                    balance_raw = balance_info.get('balance', '0')
-                    # USDC has 6 decimals
-                    available_balance = Decimal(balance_raw) / Decimal('1000000')
-                    
-                    logger.info(f"💰 Available balance: ${available_balance:.2f}")
-                    
-                    # Check if we have enough balance (with 1% buffer for fees)
-                    required_balance = Decimal(str(actual_value)) * Decimal('1.01')
-                    if available_balance < required_balance:
-                        logger.error(f"❌ Insufficient balance: ${available_balance:.2f} < ${required_balance:.2f} (required)")
-                        logger.error(f"   Please add at least ${required_balance - available_balance:.2f} USDC to your wallet")
-                        return False
+            # Check if order meets minimum value
+            if order_value < MIN_ORDER_VALUE:
+                if price_f > 0:
+                    min_shares_needed = math.ceil((MIN_ORDER_VALUE / price_f) * 100) / 100
+                    logger.warning(f"⚠️ Order value ${order_value:.2f} < ${MIN_ORDER_VALUE:.2f} minimum")
+                    logger.info(f"   Adjusting shares: {size_f:.2f} → {min_shares_needed:.2f}")
+                    size_f = min_shares_needed
+                    order_value = price_f * size_f
                 else:
-                    logger.warning("⚠️ Could not verify balance, proceeding with caution")
-            except Exception as balance_error:
-                logger.warning(f"⚠️ Balance check failed: {balance_error}")
-                logger.warning("   Proceeding with order placement (may fail if insufficient balance)")
+                    logger.error("❌ Price is 0, cannot place order")
+                    return False
             
-            # ============================================================
-            # STEP 4: Create and place the order
-            # ============================================================
+            # Check market-specific minimum size requirement
+            # Some markets require minimum 5 shares
+            try:
+                # Try to get minimum size from market metadata
+                # The API returns this in the error, but we should check beforehand
+                logger.info(f"📊 Checking market requirements for token {token_id[:16]}...")
+                
+                # Calculate if we can afford minimum 5 shares
+                min_shares_check = 5.0
+                min_value_for_5_shares = price_f * min_shares_check
+                
+                # If market might require 5 shares and we can't afford it, skip
+                if size_f < min_shares_check:
+                    logger.warning(f"⚠️ Order size {size_f:.2f} may be below market minimum (typically 5 shares)")
+                    logger.warning(f"   Required value for 5 shares: ${min_value_for_5_shares:.2f}")
+                    logger.warning(f"   Current balance: Check if sufficient")
+                    logger.warning(f"   SKIPPING this market - insufficient size")
+                    return False
+                    
+            except Exception as check_error:
+                logger.debug(f"Could not pre-check minimum size: {check_error}")
             
-            logger.info(f"🔨 Creating limit order...")
+            logger.info(f"Creating limit order: {size_f:.2f} shares @ ${price_f:.4f} (total: ${order_value:.2f})")
             
             order_args = OrderArgs(
                 token_id=token_id,
                 price=price_f,  # Price per share (library rounds to tick size)
-                size=size_f,    # Number of shares (already rounded to 2 decimals)
+                size=size_f,    # Number of shares (library rounds to 2 decimals)
                 side=BUY,
             )
             
             signed_order = self.clob_client.create_order(order_args)
-            logger.info(f"✍️ Order signed, submitting to exchange...")
-            
             response = self.clob_client.post_order(signed_order)
             
-            # ============================================================
-            # STEP 5: Handle response and track position with ACTUAL size
-            # ============================================================
-            
-            if not response:
-                logger.error("❌ ORDER FAILED: Empty response from exchange")
+            if response:
+                order_id = "unknown"
+                if isinstance(response, dict):
+                    order_id = response.get("orderID") or response.get("order_id") or "unknown"
+                
+                logger.info(f"✅ ORDER PLACED: {order_id}")
+                
+                # Track position (including neg_risk for correct sell orders)
+                self.positions[token_id] = Position(
+                    token_id=token_id,
+                    side=side,
+                    entry_price=price,
+                    size=Decimal(str(size_f)),  # Use actual placed size
+                    entry_time=datetime.now(timezone.utc),
+                    market_id=market.market_id,
+                    asset=market.asset,
+                    strategy=strategy,
+                    neg_risk=getattr(market, 'neg_risk', True),
+                    highest_price=price  # PHASE 3A: Initialize peak price
+                )
+                self.stats["trades_placed"] += 1
+                self.daily_trade_count += 1
+                # PHASE 4A: Register position with risk manager
+                self.risk_manager.add_position(market.market_id, side, price, Decimal(str(size_f)))
+                return True
+            else:
+                logger.error("❌ ORDER FAILED: Empty response")
                 return False
-            
-            # Extract order details from response
-            order_id = "unknown"
-            order_status = "unknown"
-            
-            if isinstance(response, dict):
-                order_id = response.get("orderID") or response.get("order_id") or "unknown"
-                order_status = response.get("status", "unknown")
-                success = response.get("success", True)
-                error_msg = response.get("errorMsg", "")
-                
-                # Log response details
-                logger.info(f"📨 Exchange response:")
-                logger.info(f"   Order ID: {order_id}")
-                logger.info(f"   Status: {order_status}")
-                
-                if not success or error_msg:
-                    logger.error(f"❌ ORDER FAILED: {error_msg}")
-                    return False
-            
-            logger.info(f"✅ ORDER PLACED SUCCESSFULLY: {order_id}")
-            logger.info(f"   Actual size placed: {size_f:.2f} shares")
-            logger.info(f"   Actual value: ${actual_value:.4f}")
-            
-            # ============================================================
-            # STEP 6: Track position with ACTUAL placed size (CRITICAL FIX)
-            # ============================================================
-            
-            # Use size_f (actual placed size) not shares (requested size)
-            actual_size_decimal = Decimal(str(size_f))
-            actual_price_decimal = Decimal(str(price_f))
-            
-            self.positions[token_id] = Position(
-                token_id=token_id,
-                side=side,
-                entry_price=actual_price_decimal,  # Use actual price
-                size=actual_size_decimal,  # CRITICAL: Use actual placed size
-                entry_time=datetime.now(timezone.utc),
-                market_id=market.market_id,
-                asset=market.asset,
-                strategy=strategy,
-                neg_risk=getattr(market, 'neg_risk', True),
-                highest_price=actual_price_decimal  # PHASE 3A: Initialize peak price
-            )
-            
-            self.stats["trades_placed"] += 1
-            self.daily_trade_count += 1
-            
-            # PHASE 4A: Register position with risk manager using ACTUAL size
-            self.risk_manager.add_position(
-                market.market_id, 
-                side, 
-                actual_price_decimal, 
-                actual_size_decimal  # CRITICAL: Use actual placed size
-            )
-            
-            logger.info(f"📝 Position tracked: {size_f:.2f} shares @ ${price_f:.4f}")
-            
-            return True
                 
         except Exception as e:
-            logger.error(f"❌ Order placement error: {e}", exc_info=True)
-            logger.error(f"   This order was NOT placed")
+            error_msg = str(e)
+            
+            # Check if it's a minimum size error
+            if "lower than the minimum" in error_msg:
+                logger.error(f"❌ Market requires larger minimum size than we can afford")
+                logger.error(f"   Error: {error_msg}")
+                logger.error(f"   SOLUTION: Skip markets with high minimum size requirements")
+            else:
+                logger.error(f"❌ Order error: {e}", exc_info=True)
+            
             return False
     
     async def _close_position(self, position: Position, current_price: Decimal) -> bool:
         """
-        Close a position by selling with comprehensive validation.
+        Close a position by selling.
         
         Args:
             position: Position to close
@@ -1771,16 +1603,6 @@ class FifteenMinuteCryptoStrategy:
         logger.info(f"   Size: {position.size}")
         logger.info(f"   Entry: ${position.entry_price}")
         logger.info(f"   Exit: ${current_price}")
-        
-        # Calculate P&L
-        entry_value = float(position.entry_price) * float(position.size)
-        exit_value = float(current_price) * float(position.size)
-        pnl = exit_value - entry_value
-        pnl_pct = (pnl / entry_value * 100) if entry_value > 0 else 0
-        
-        logger.info(f"   Entry Value: ${entry_value:.2f}")
-        logger.info(f"   Exit Value: ${exit_value:.2f}")
-        logger.info(f"   P&L: ${pnl:+.2f} ({pnl_pct:+.1f}%)")
         logger.info("=" * 80)
         
         if self.dry_run:
@@ -1788,85 +1610,42 @@ class FifteenMinuteCryptoStrategy:
             return True
             
         try:
-            # Import required modules
+            # Use create_order with price/size (library handles decimal rounding internally)
             from py_clob_client.clob_types import OrderArgs
             from py_clob_client.order_builder.constants import SELL
             
             price_f = float(current_price)
             size_f = float(position.size)
             
-            # Validate parameters
-            if price_f <= 0:
-                logger.error("❌ Exit price is 0 or negative, cannot close position")
-                return False
+            logger.info(f"Creating SELL limit order: {size_f:.2f} shares @ ${price_f:.4f} (total: ${price_f * size_f:.2f})")
             
-            if size_f <= 0:
-                logger.error("❌ Position size is 0 or negative, cannot close position")
-                return False
-            
-            # Round size to 2 decimals (Polymarket precision)
-            size_f = round(size_f, 2)
-            
-            # Calculate order value
-            order_value = price_f * size_f
-            
-            logger.info(f"🔨 Creating SELL limit order:")
-            logger.info(f"   Size: {size_f:.2f} shares")
-            logger.info(f"   Price: ${price_f:.4f}")
-            logger.info(f"   Total Value: ${order_value:.4f}")
-            
-            # Create sell order
             order_args = OrderArgs(
                 token_id=position.token_id,
                 price=price_f,  # Price per share (library rounds to tick size)
-                size=size_f,    # Number of shares (already rounded to 2 decimals)
+                size=size_f,    # Number of shares (library rounds to 2 decimals)
                 side=SELL,
             )
             
             signed_order = self.clob_client.create_order(order_args)
-            logger.info(f"✍️ Order signed, submitting to exchange...")
-            
             response = self.clob_client.post_order(signed_order)
             
-            # Handle response
-            if not response:
-                logger.error("❌ CLOSE FAILED: Empty response from exchange")
+            if response:
+                order_id = "unknown"
+                if isinstance(response, dict):
+                    order_id = response.get("orderID") or response.get("order_id") or "unknown"
+                logger.info(f"✅ POSITION CLOSED: {order_id}")
+                # PHASE 4A: Close position in risk manager
+                try:
+                    self.risk_manager.close_position(position.market_id, current_price)
+                except Exception as e:
+                    logger.debug(f"Risk manager close_position: {e}")
+                return True
+            else:
+                logger.error("❌ Close failed: No response")
                 return False
-            
-            # Extract order details
-            order_id = "unknown"
-            order_status = "unknown"
-            
-            if isinstance(response, dict):
-                order_id = response.get("orderID") or response.get("order_id") or "unknown"
-                order_status = response.get("status", "unknown")
-                success = response.get("success", True)
-                error_msg = response.get("errorMsg", "")
-                
-                logger.info(f"📨 Exchange response:")
-                logger.info(f"   Order ID: {order_id}")
-                logger.info(f"   Status: {order_status}")
-                
-                if not success or error_msg:
-                    logger.error(f"❌ CLOSE FAILED: {error_msg}")
-                    return False
-            
-            logger.info(f"✅ POSITION CLOSED SUCCESSFULLY: {order_id}")
-            logger.info(f"   Sold {size_f:.2f} shares @ ${price_f:.4f}")
-            logger.info(f"   Realized P&L: ${pnl:+.2f} ({pnl_pct:+.1f}%)")
-            
-            # PHASE 4A: Close position in risk manager
-            try:
-                self.risk_manager.close_position(position.market_id, current_price)
-                logger.info(f"📝 Position removed from risk manager")
-            except Exception as e:
-                logger.debug(f"Risk manager close_position: {e}")
-            
-            return True
                 
         except Exception as e:
-            logger.error(f"❌ Close position error: {e}", exc_info=True)
-            logger.error(f"   Position was NOT closed")
+            logger.error(f"Close error: {e}", exc_info=True)
             return False
             
     async def run_cycle(self):

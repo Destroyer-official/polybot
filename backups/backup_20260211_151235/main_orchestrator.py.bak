@@ -323,7 +323,7 @@ class MainOrchestrator:
         logger.info("Initializing LLM Decision Engine V2 (Perfect Edition)...")
         self.llm_decision_engine = LLMDecisionEngineV2(
             nvidia_api_key=config.nvidia_api_key,
-            min_confidence_threshold=45.0,  # 45% threshold - balanced between opportunity and safety
+            min_confidence_threshold=50.0,  # Lowered to 50% for more trades (was 60%)
             max_position_pct=5.0,  # Max 5% of balance per trade
             decision_timeout=5.0,  # 5 second timeout for LLM calls
             enable_chain_of_thought=True
@@ -371,13 +371,13 @@ class MainOrchestrator:
         self.fifteen_min_strategy = FifteenMinuteCryptoStrategy(
             clob_client=self.clob_client,
             trade_size=initial_trade_size,  # DYNAMIC: Will be adjusted by risk manager
-            take_profit_pct=0.005,  # 0.5% profit target (Realistic for 15-min markets - prices move slowly)
-            stop_loss_pct=0.01,  # 1% stop loss (Tight risk control)
+            take_profit_pct=0.04,  # 4% profit target (Optimized for volatility)
+            stop_loss_pct=0.02,  # 2% stop loss (Tight risk control)
             max_positions=10,  # INCREASED: Allow more concurrent trades
             sum_to_one_threshold=1.02,
             dry_run=config.dry_run,
             llm_decision_engine=self.llm_decision_engine,
-            enable_adaptive_learning=False,  # CRITICAL FIX: Disable (breaks dynamic take profit)
+            enable_adaptive_learning=False,  # UNLOCKED: Disable cold-start protection for max aggression
             initial_capital=float(config.target_balance)  # Pass balance for risk management
         )
         logger.info("✅ 15-Minute Crypto Strategy enabled (AGGRESSIVE MODE: Learning Constraints Removed)")

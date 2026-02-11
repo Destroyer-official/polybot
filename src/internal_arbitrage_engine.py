@@ -365,14 +365,16 @@ class InternalArbitrageEngine:
                 market_id=market.market_id,
                 side="YES",
                 price=opportunity.yes_price,
-                size=position_size
+                size=position_size,
+                neg_risk=True
             )
             
             no_order = self.order_manager.create_fok_order(
                 market_id=market.market_id,
                 side="NO",
                 price=opportunity.no_price,
-                size=position_size
+                size=position_size,
+                neg_risk=True
             )
             
             logger.info(

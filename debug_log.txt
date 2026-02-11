@@ -1,0 +1,200 @@
+Feb 11 08:12:45 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:45,772 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:45 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:45,772 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,335 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,335 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,335 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,363 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,399 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,433 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,473 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,489 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,490 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.17 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,491 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 7s ago), skipping
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,491 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,491 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.61 | 10s Change=-0.113% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,491 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 5s ago), skipping
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,491 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.80 | 10s Change=-0.111% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 4s ago), skipping
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.095% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 4s ago), skipping
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,492 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,507 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,543 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:46 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:46,543 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,383 - src.main_orchestrator - INFO - Fetched 100 active markets from Gamma API
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,383 - src.main_orchestrator - INFO - Converted 100 markets from Gamma API format
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,384 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,384 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,384 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,417 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,455 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,494 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,554 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,579 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,580 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.16 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,580 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 8s ago), skipping
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,580 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.61 | 10s Change=-0.113% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 6s ago), skipping
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.80 | 10s Change=-0.111% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 5s ago), skipping
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.102% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 5s ago), skipping
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,582 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,598 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,637 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:47 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:47,637 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,338 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,338 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,338 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,371 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,409 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,489 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,560 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,580 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,581 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.16 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,581 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 9s ago), skipping
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,581 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.61 | 10s Change=-0.113% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 7s ago), skipping
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.80 | 10s Change=-0.111% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 6s ago), skipping
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.095% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 6s ago), skipping
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,583 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,603 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,643 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:48 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:48,643 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,397 - src.main_orchestrator - INFO - Fetched 100 active markets from Gamma API
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,398 - src.main_orchestrator - INFO - Converted 100 markets from Gamma API format
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,399 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,399 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,399 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,426 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,457 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,488 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,522 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,544 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,545 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.17 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,545 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 10s ago), skipping
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,545 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.76 | 10s Change=-0.105% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 8s ago), skipping
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.80 | 10s Change=-0.111% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 7s ago), skipping
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.095% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 7s ago), skipping
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,546 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,547 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,560 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,596 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:49 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:49,596 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,340 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,340 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,340 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,366 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,434 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,471 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,503 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,529 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,530 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.17 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,530 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 11s ago), skipping
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,530 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.60 | 10s Change=-0.113% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 9s ago), skipping
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.81 | 10s Change=-0.099% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 8s ago), skipping
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.095% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 8s ago), skipping
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,531 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,550 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,588 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:50 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:50,589 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,403 - src.main_orchestrator - INFO - Fetched 100 active markets from Gamma API
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,404 - src.main_orchestrator - INFO - Converted 100 markets from Gamma API format
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,404 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,404 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,404 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,434 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,471 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,505 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,535 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,548 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,550 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.17 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,550 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 12s ago), skipping
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,550 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,551 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.60 | 10s Change=-0.113% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,551 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 10s ago), skipping
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,551 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.81 | 10s Change=-0.099% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 9s ago), skipping
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.095% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 9s ago), skipping
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,552 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,569 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,606 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:51 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:51,606 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,342 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,342 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,342 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,368 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,400 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,444 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,472 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,488 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,490 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66945.17 | 10s Change=-0.130% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,490 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 13s ago), skipping
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,490 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1945.60 | 10s Change=-0.113% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 11s ago), skipping
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.81 | 10s Change=-0.099% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 10s ago), skipping
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.095% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 10s ago), skipping
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,491 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,516 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,556 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk markets
+Feb 11 08:12:52 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:52,557 - src.negrisk_arbitrage_engine - INFO - Found 0 NegRisk opportunities
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,400 - src.main_orchestrator - INFO - Fetched 100 active markets from Gamma API
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,401 - src.main_orchestrator - INFO - Converted 100 markets from Gamma API format
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,402 - src.main_orchestrator - INFO - Parsed 77 tradeable markets
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,402 - src.main_orchestrator - INFO - 🔥 Running Flash Crash Strategy...
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,402 - src.main_orchestrator - INFO - ⏱️ Running 15-Minute Crypto Strategy...
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,428 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT BTC market: Up=$0.54, Down=$0.46, Ends: 08:15:00 UTC
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,469 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT ETH market: Up=$0.52, Down=$0.48, Ends: 08:15:00 UTC
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,533 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT SOL market: Up=$0.47, Down=$0.53, Ends: 08:15:00 UTC
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,563 - src.fifteen_min_crypto_strategy - INFO - 🎯 CURRENT XRP market: Up=$0.62, Down=$0.38, Ends: 08:15:00 UTC
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,579 - src.fifteen_min_crypto_strategy - INFO - 📊 Found 4 CURRENT 15-minute markets (trading now!)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,580 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: BTC | Binance=$66964.56 | 10s Change=-0.101% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,581 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: BTC | Rate limited (checked 14s ago), skipping
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,581 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: BTC | UP=$0.545 + DOWN=$0.455 = $1.000 (Target < $1.02)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: ETH | Binance=$1946.23 | 10s Change=-0.081% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: ETH | Rate limited (checked 12s ago), skipping
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: ETH | UP=$0.525 + DOWN=$0.475 = $1.000 (Target < $1.02)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: SOL | Binance=$80.82 | 10s Change=-0.087% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: SOL | Rate limited (checked 11s ago), skipping
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: SOL | UP=$0.470 + DOWN=$0.530 = $1.000 (Target < $1.02)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 📊 LATENCY CHECK: XRP | Binance=$1.37 | 10s Change=-0.080% | Multi-TF: NEUTRAL (0.0%)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 🤖 DIRECTIONAL CHECK: XRP | Rate limited (checked 11s ago), skipping
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.fifteen_min_crypto_strategy - INFO - 💰 SUM-TO-ONE CHECK: XRP | UP=$0.615 + DOWN=$0.385 = $1.000 (Target < $1.02)
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,582 - src.main_orchestrator - INFO - 🎯 Scanning NegRisk markets for multi-outcome arbitrage...
+Feb 11 08:12:53 ip-172-31-11-229 polybot[76308]: 2026-02-11 08:12:53,894 - httpx - INFO - HTTP Request: GET https://clob.polymarket.com/markets?next_cursor=MA== "HTTP/2 200 OK"

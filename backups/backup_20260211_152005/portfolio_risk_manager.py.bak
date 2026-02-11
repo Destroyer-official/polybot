@@ -141,15 +141,10 @@ class PortfolioRiskManager:
         win_rate = self._wins_today / self._trades_today if self._trades_today > 0 else 0.5
         
         # Calculate max allowed position
-        # Polymarket requires minimum $1 order, so ensure max_position is at least $1
-        max_position_from_pct = self.current_capital * self.max_position_size_pct
-        max_position_from_heat = self._get_remaining_heat() * Decimal('0.5')  # Use max 50% of remaining heat
-        
-        max_position = min(max_position_from_pct, max_position_from_heat)
-        
-        # If max_position is less than $1 but we have at least $1 in capital, allow $1 trades
-        if max_position < Decimal('1.0') and self.current_capital >= Decimal('1.0'):
-            max_position = min(Decimal('1.0'), self.current_capital * Decimal('0.30'))  # Max 30% for small balances
+        max_position = min(
+            self.current_capital * self.max_position_size_pct,
+            self._get_remaining_heat() * Decimal('0.5')  # Use max 50% of remaining heat
+        )
         
         # Check constraints
         can_trade = True
@@ -160,15 +155,10 @@ class PortfolioRiskManager:
             can_trade = False
             reason = f"Trading halted: {self._halt_reason}"
         
-        # 2. Portfolio heat check (RELAXED for small balances)
-        # For balances < $10, allow up to 80% deployment to meet $1 minimum orders
-        effective_max_heat = self.max_portfolio_heat
-        if self.current_capital < Decimal('10.0'):
-            effective_max_heat = Decimal('0.80')  # Allow 80% for small balances
-        
-        if heat_pct + (proposed_size / self.current_capital) > effective_max_heat:
+        # 2. Portfolio heat check
+        elif heat_pct + (proposed_size / self.current_capital) > self.max_portfolio_heat:
             can_trade = False
-            reason = f"Portfolio heat too high: {heat_pct*100:.1f}% + {proposed_size/self.current_capital*100:.1f}% > {effective_max_heat*100}%"
+            reason = f"Portfolio heat too high: {heat_pct*100:.1f}% + {proposed_size/self.current_capital*100:.1f}% > {self.max_portfolio_heat*100}%"
         
         # 3. Daily drawdown check
         elif daily_drawdown >= self.max_daily_drawdown:
@@ -182,23 +172,19 @@ class PortfolioRiskManager:
             reason = f"Consecutive loss limit: {self._consecutive_losses} >= {self.consecutive_loss_limit}"
             self._trigger_halt("Consecutive losses", duration_hours=1)
         
-        # 5. Market exposure check (DISABLED for small balances)
-        # For small balances (<$10), skip market exposure check entirely
-        # This allows multiple $1 trades to different markets
-        elif self.current_capital >= Decimal('10.0'):  # Only check if balance > $10
-            max_market_exposure = self.current_capital * self.max_position_per_market_pct
-            
-            if self._get_market_exposure(market_id) + proposed_size > max_market_exposure:
-                can_trade = False
-                reason = f"Market exposure limit for {market_id}"
+        # 5. Market exposure check
+        elif self._get_market_exposure(market_id) + proposed_size > \
+             self.current_capital * self.max_position_per_market_pct:
+            can_trade = False
+            reason = f"Market exposure limit for {market_id}"
         
         # 6. Position size check
-        if can_trade and proposed_size > max_position:
+        elif proposed_size > max_position:
             can_trade = False
             reason = f"Position too large: ${proposed_size} > max ${max_position}"
         
         # 7. Minimum capital check
-        if can_trade and self.current_capital < Decimal('1.0'):
+        elif self.current_capital < Decimal('1.0'):
             can_trade = False
             reason = "Insufficient capital (< $1.00)"
         

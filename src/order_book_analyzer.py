@@ -91,21 +91,40 @@ class OrderBookAnalyzer:
                 return None
             
             # Parse bids and asks
+            # py_clob_client returns OrderBookSummary dataclass with .bids/.asks attributes
+            # Each entry is an OrderSummary dataclass with .price and .size as strings
             bids = []
             asks = []
             
-            bids_data = response.get("bids", [])
-            asks_data = response.get("asks", [])
+            bids_data = getattr(response, 'bids', None) or []
+            asks_data = getattr(response, 'asks', None) or []
             
             for bid in bids_data[:10]:  # Top 10 levels
-                price = Decimal(str(bid.get("price", 0)))
-                size = Decimal(str(bid.get("size", 0)))
+                # Handle both object and dict access
+                if isinstance(bid, dict):
+                    price_val = bid.get('price', 0)
+                    size_val = bid.get('size', 0)
+                else:
+                    price_val = getattr(bid, 'price', 0)
+                    size_val = getattr(bid, 'size', 0)
+                    
+                price = Decimal(str(price_val or 0))
+                size = Decimal(str(size_val or 0))
+                
                 if price > 0 and size > 0:
                     bids.append(OrderBookLevel(price=price, size=size))
             
             for ask in asks_data[:10]:  # Top 10 levels
-                price = Decimal(str(ask.get("price", 0)))
-                size = Decimal(str(ask.get("size", 0)))
+                if isinstance(ask, dict):
+                    price_val = ask.get('price', 0)
+                    size_val = ask.get('size', 0)
+                else:
+                    price_val = getattr(ask, 'price', 0)
+                    size_val = getattr(ask, 'size', 0)
+                    
+                price = Decimal(str(price_val or 0))
+                size = Decimal(str(size_val or 0))
+                
                 if price > 0 and size > 0:
                     asks.append(OrderBookLevel(price=price, size=size))
             
