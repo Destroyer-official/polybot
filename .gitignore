@@ -1,57 +1,127 @@
-# Environment and secrets
-.env
-*.env
-!.env.example
-*.pem
-
 # Python
-venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
+*.py[cod]
+*$py.class
 *.so
-*.egg
-*.egg-info/
-dist/
+.Python
 build/
-.pytest_cache/
-.hypothesis/
-.coverage
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# Archive folder (old dev files)
-_archive/
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
 
-# Rust
-rust_core/target/
-Cargo.lock
-
-# Logs and data
-logs/*.log
-logs/*.json
-data/*.json
-*.log
-!logs/.gitkeep
+# Environment Variables
+.env
+.env.local
 
 # IDE
 .vscode/
 .idea/
-.kiro/
 *.swp
 *.swo
+*~
+
+# Testing
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Logs
+logs/*.log
+*.log
+debug_*.txt
+verify_*.txt
+aws_*.txt
+local_*.txt
+test_*.txt
+
+# Data
+data/*.json
+data/*.csv
+data/*.db
+!data/.gitkeep
+
+# Backups
+backups/
+_archive/
+_cleanup_archive/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
 *~
 
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Config
-config/config.yaml
-!config/config.example.yaml
+# Security - NEVER COMMIT THESE
+*.pem
+*.key
+private_key*
+PRIVATE_KEY*
 
-# Database
-*.db
-*.sqlite
-*.sqlite3
-state.json
+# Deployment
+*.ps1
+deploy_fixes.*
+deploy_trading_fixes.*
+
+# Documentation (temporary/debug)
+*_COMPLETE.md
+*_STATUS.md
+*_SUMMARY.md
+*_FIX*.md
+*_FIXES*.md
+CRITICAL_*.md
+EMERGENCY_*.md
+DEPLOYMENT_*.md
+INTEGRATION_*.md
+VERIFICATION_*.md
+BEFORE_AFTER_*.md
+COMPLETE_*.md
+COMPREHENSIVE_FIX_*.md
+FINAL_*.md
+!COMPREHENSIVE_TRADING_FIXES.md
+!DEPLOY_NOW.md
+!README.md
+
+# Test files (temporary)
+test_*.py
+check_*.py
+debug_*.py
+analyze_*.py
+diagnose_*.py
+fix_*.py
+make_*.py
+apply_*.py
+comprehensive_*.py
+!tests/test_*.py
+
+# Server files
+fifteen_min_crypto_strategy_*_server*.py
+*_from_server.py
+
+# Cleanup
+cleanup_repo.py
+final_pre_deployment_check.py
