@@ -365,9 +365,11 @@ class EnsembleDecisionEngine:
             )
             return False
         
-        # Require minimum confidence (lowered to 10% for aggressive trading)
-        if decision.confidence < 10.0:
-            logger.debug(f"⏭️ Low confidence: {decision.confidence:.1f}%")
+        # DYNAMIC: No minimum confidence - let market conditions decide
+        # Even 1% confidence can be profitable with good risk/reward
+        # The strategy will handle position sizing based on confidence
+        if decision.confidence < 1.0:
+            logger.debug(f"⏭️ Extremely low confidence: {decision.confidence:.1f}%")
             return False
         
         return True

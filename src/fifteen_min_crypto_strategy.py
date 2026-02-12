@@ -346,7 +346,7 @@ class FifteenMinuteCryptoStrategy:
             rl_engine=self.rl_engine,
             historical_tracker=self.success_tracker,
             multi_tf_analyzer=self.multi_tf_analyzer,
-            min_consensus=5.0  # AGGRESSIVE MODE: 5% for maximum trading (profit focus)
+            min_consensus=0.0  # ULTRA AGGRESSIVE: Take ANY trade with positive confidence
         )
         
         # PHASE 3: Context Optimizer (40% faster LLM responses)
@@ -423,19 +423,22 @@ class FifteenMinuteCryptoStrategy:
                 logger.info(f"   Stop-loss: {self.stop_loss_pct * 100:.2f}%")
         
         # NEW: SUPER SMART Learning Engine (even more advanced!)
-        from src.super_smart_learning import SuperSmartLearning
-        self.super_smart = SuperSmartLearning(data_file="data/super_smart_learning.json")
-        
-        # Use super smart parameters if we have enough data
-        if self.super_smart.total_trades >= 5:
-            optimal = self.super_smart.get_optimal_parameters()
-            self.take_profit_pct = Decimal(str(optimal["take_profit_pct"]))
-            self.stop_loss_pct = Decimal(str(optimal["stop_loss_pct"]))
-            logger.info(f"🚀 Using SUPER SMART parameters from {self.super_smart.total_trades} trades!")
-            logger.info(f"   Take-profit: {self.take_profit_pct * 100:.1f}%")
-            logger.info(f"   Stop-loss: {self.stop_loss_pct * 100:.1f}%")
-            logger.info(f"   Best strategy: {self.super_smart.get_best_strategy()}")
-            logger.info(f"   Best asset: {self.super_smart.get_best_asset()}")
+        # Only load if adaptive learning is enabled
+        self.super_smart = None
+        if enable_adaptive_learning:
+            from src.super_smart_learning import SuperSmartLearning
+            self.super_smart = SuperSmartLearning(data_file="data/super_smart_learning.json")
+            
+            # Use super smart parameters if we have enough data
+            if self.super_smart.total_trades >= 5:
+                optimal = self.super_smart.get_optimal_parameters()
+                self.take_profit_pct = Decimal(str(optimal["take_profit_pct"]))
+                self.stop_loss_pct = Decimal(str(optimal["stop_loss_pct"]))
+                logger.info(f"🚀 Using SUPER SMART parameters from {self.super_smart.total_trades} trades!")
+                logger.info(f"   Take-profit: {self.take_profit_pct * 100:.1f}%")
+                logger.info(f"   Stop-loss: {self.stop_loss_pct * 100:.1f}%")
+                logger.info(f"   Best strategy: {self.super_smart.get_best_strategy()}")
+                logger.info(f"   Best asset: {self.super_smart.get_best_asset()}")
         
         logger.info("=" * 80)
         logger.info("15-MINUTE CRYPTO TRADING STRATEGY INITIALIZED")
@@ -466,6 +469,9 @@ class FifteenMinuteCryptoStrategy:
         logger.info(f"  📋 Daily Trade Limit: {self.max_daily_trades}")
         logger.info(f"  🎯 Per-Asset Limit: {self.max_positions_per_asset} positions")
         logger.info("=" * 80)
+        
+        # CRITICAL FIX: Sync risk manager with loaded positions (must be AFTER risk_manager init)
+        self._sync_risk_manager()
     
     def _load_positions(self):
         """Load positions from disk to survive restarts."""
@@ -492,13 +498,60 @@ class FifteenMinuteCryptoStrategy:
                     )
                 
                 logger.info(f"📂 Loaded {len(self.positions)} positions from disk")
-                for token_id, pos in self.positions.items():
-                    logger.info(f"   - {pos.asset} {pos.side}: entry=${pos.entry_price}, size={pos.size}")
+                
+                # CRITICAL FIX: Validate positions and remove phantom/test positions
+                phantom_positions = []
+                for token_id, pos in list(self.positions.items()):
+                    # Check for test positions (never actually placed)
+                    if 'test' in token_id.lower() or 'test' in pos.market_id.lower():
+                        logger.warning(f"⚠️ Removing test position: {pos.asset} {pos.side} (token: {token_id})")
+                        phantom_positions.append(token_id)
+                        continue
+                    
+                    # Check for positions older than 24 hours (likely phantom)
+                    age_hours = (datetime.now(timezone.utc) - pos.entry_time).total_seconds() / 3600
+                    if age_hours > 24:
+                        logger.warning(f"⚠️ Removing stale position (>{age_hours:.1f}h old): {pos.asset} {pos.side}")
+                        phantom_positions.append(token_id)
+                        continue
+                    
+                    logger.info(f"   ✅ {pos.asset} {pos.side}: entry=${pos.entry_price}, size={pos.size}")
+                
+                # Remove phantom positions
+                for token_id in phantom_positions:
+                    del self.positions[token_id]
+                
+                if phantom_positions:
+                    logger.info(f"🧹 Cleaned {len(phantom_positions)} phantom/test positions")
+                    # Save cleaned positions
+                    self._save_positions()
+                
+                logger.info(f"📊 Active positions: {len(self.positions)}")
             else:
                 logger.info("📂 No saved positions found (clean start)")
         except Exception as e:
             logger.error(f"Failed to load positions: {e}")
             self.positions = {}
+    
+    def _sync_risk_manager(self):
+        """Sync risk manager with loaded positions. Call AFTER risk_manager is initialized."""
+        try:
+            # CRITICAL FIX: Clear risk manager's internal state and re-add only valid positions
+            logger.info(f"🔄 Syncing risk manager with {len(self.positions)} valid positions...")
+            self.risk_manager._positions = {}  # Clear risk manager state
+            
+            for token_id, pos in self.positions.items():
+                self.risk_manager.add_position(
+                    pos.market_id,
+                    pos.side,
+                    pos.entry_price,
+                    pos.size
+                )
+                logger.info(f"   ✅ Registered {pos.asset} {pos.side} with risk manager")
+            
+            logger.info(f"✅ Risk manager synced with {len(self.positions)} positions")
+        except Exception as e:
+            logger.error(f"Failed to sync risk manager: {e}")
     
     def _save_positions(self):
         """Save positions to disk for persistence across restarts."""
@@ -1075,9 +1128,19 @@ class FifteenMinuteCryptoStrategy:
                     # PHASE 3B: Use progressive position sizing
                     adjusted_size = self._calculate_position_size()
                     
-                    # Buy both sides - ENFORCE min 5 shares per side
-                    up_shares = max(5.0, float(adjusted_size / 2 / market.up_price))
-                    down_shares = max(5.0, float(adjusted_size / 2 / market.down_price))
+                    # DYNAMIC: Calculate shares to meet Polymarket minimums
+                    # Polymarket requires: min $1.00 trade value per side
+                    min_value_per_side = Decimal("1.0")
+                    
+                    # Calculate shares needed for each side
+                    up_shares_for_min = float(min_value_per_side / market.up_price)
+                    down_shares_for_min = float(min_value_per_side / market.down_price)
+                    
+                    # Use larger of: half the position size OR minimum required
+                    up_shares = max(up_shares_for_min, float(adjusted_size / 2 / market.up_price))
+                    down_shares = max(down_shares_for_min, float(adjusted_size / 2 / market.down_price))
+                    
+                    logger.info(f"📊 Buy both: UP={up_shares:.2f} shares (${up_shares*float(market.up_price):.2f}), DOWN={down_shares:.2f} shares (${down_shares*float(market.down_price):.2f})")
                     
                     # Execute trades
                     await self._place_order(market, "UP", market.up_price, up_shares, strategy="sum_to_one")
@@ -1266,12 +1329,12 @@ class FifteenMinuteCryptoStrategy:
         # Calculate recent volatility/change from Binance if available
         change_10s = self.binance_feed.get_price_change(market.asset, seconds=10)
         
-        # Determine Binance momentum
+        # Determine Binance momentum - AGGRESSIVE: 0.03% threshold
         binance_momentum = "neutral"
         if change_10s:
-            if change_10s > Decimal("0.001"):
+            if change_10s > Decimal("0.0003"):  # 0.03% = 0.0003
                 binance_momentum = "bullish"
-            elif change_10s < Decimal("-0.001"):
+            elif change_10s < Decimal("-0.0003"):  # -0.03% = -0.0003
                 binance_momentum = "bearish"
         
         # Get current Binance price
@@ -1373,23 +1436,36 @@ class FifteenMinuteCryptoStrategy:
                 adjusted_size = self._calculate_position_size()
                 shares_needed = adjusted_size / target_price
                 
-                # FIX: Check liquidity with RELAXED slippage tolerance for temporal arbitrage
-                # 15% slippage is acceptable because temporal arbitrage edge is 10-20%
+                # DYNAMIC: Calculate acceptable slippage based on expected profit
+                # If confidence is 60%, we can accept up to 30% slippage and still profit
+                expected_profit_pct = ensemble_decision.confidence / 100.0
+                acceptable_slippage = max(Decimal("0.05"), Decimal(str(expected_profit_pct * 0.5)))  # 50% of expected profit
+                
                 can_trade, liq_reason = await self.order_book_analyzer.check_liquidity(
-                    target_token, "buy", shares_needed, max_slippage=Decimal("0.85")  # 15% slippage OK
+                    target_token, "buy", shares_needed, max_slippage=acceptable_slippage
                 )
                 
                 if not can_trade:
                     if "Excessive slippage" in liq_reason:
-                        # Try with smaller position sizes
+                        # Try with smaller position sizes but NEVER go below 5 shares (Polymarket minimum)
                         logger.warning(f"⚠️ HIGH SLIPPAGE with ${adjusted_size:.2f} - trying smaller sizes")
                         
-                        for size_pct in [0.5, 0.25, 0.10]:  # Try 50%, 25%, 10% of original
+                        # Calculate minimum viable size based on Polymarket requirements
+                        min_shares = Decimal("5.0")  # Polymarket REQUIRES minimum 5 shares
+                        min_size_usd = min_shares * target_price
+                        
+                        for size_pct in [0.5, 0.25]:  # Try 50%, 25% only
                             smaller_size = adjusted_size * Decimal(str(size_pct))
+                            
+                            # CRITICAL: Never go below 5 shares minimum
+                            if smaller_size < min_size_usd:
+                                logger.info(f"⏭️ Size ${smaller_size:.2f} below minimum (5 shares = ${min_size_usd:.2f}), using minimum")
+                                smaller_size = min_size_usd
+                            
                             smaller_shares = smaller_size / target_price
                             
                             can_trade_small, liq_reason_small = await self.order_book_analyzer.check_liquidity(
-                                target_token, "buy", smaller_shares, max_slippage=Decimal("0.85")  # 15% slippage OK
+                                target_token, "buy", smaller_shares, max_slippage=acceptable_slippage
                             )
                             
                             if can_trade_small:
@@ -1398,13 +1474,18 @@ class FifteenMinuteCryptoStrategy:
                                 shares_needed = smaller_shares
                                 break
                         else:
-                            # Even smallest size has high slippage - USE MARKET ORDER ANYWAY for high confidence
-                            if ensemble_decision.confidence >= 70:
-                                logger.warning(f"⚠️ High slippage but HIGH CONFIDENCE ({ensemble_decision.confidence:.0f}%) - executing with market order")
-                                # Use smallest size ($0.10) with market order
-                                adjusted_size = max(Decimal("0.10"), adjusted_size * Decimal("0.10"))
+                            # Even reduced sizes have high slippage - use minimum size if profitable
+                            # DYNAMIC: Allow trade if expected profit > slippage cost
+                            expected_profit_pct = ensemble_decision.confidence / 100.0  # Use confidence as profit proxy
+                            slippage_cost_pct = 0.05  # Assume 5% slippage worst case
+                            
+                            if expected_profit_pct > slippage_cost_pct:
+                                logger.warning(f"⚠️ High slippage but PROFITABLE trade (expected {expected_profit_pct*100:.1f}% > {slippage_cost_pct*100:.1f}% slippage) - executing with minimum size")
+                                # Use minimum viable size (5 shares minimum)
+                                adjusted_size = max(min_size_usd, min_shares * target_price)
+                                shares_needed = max(min_shares, adjusted_size / target_price)
                             else:
-                                logger.error(f"🚫 SKIPPING: Excessive slippage and confidence < 70%")
+                                logger.warning(f"⏭️ Skipping: Expected profit {expected_profit_pct*100:.1f}% < slippage {slippage_cost_pct*100:.1f}%")
                                 return False
                     elif "No order book data" in liq_reason:
                         logger.info(f"⚠️ No orderbook data, using market order")
@@ -1454,6 +1535,222 @@ class FifteenMinuteCryptoStrategy:
             
         return False
     
+    async def _check_all_positions_for_exit(self) -> None:
+        """
+        CRITICAL FIX: Check ALL positions for exit conditions WITHOUT requiring market data.
+        
+        This function runs FIRST in every cycle to ensure positions are checked even if:
+        - Markets have expired
+        - API fails to return markets
+        - No matching markets found
+        
+        Uses orderbook data directly instead of relying on market fetch.
+        """
+        if not self.positions:
+            return
+        
+        now = datetime.now(timezone.utc)
+        positions_to_close = []
+        
+        logger.info(f"🔍 Checking {len(self.positions)} positions for exit conditions...")
+        
+        for token_id, position in list(self.positions.items()):
+            try:
+                # Calculate position age
+                age_min = (now - position.entry_time).total_seconds() / 60
+                
+                # CRITICAL: Check profit/loss FIRST before time-based exits
+                # This ensures we take profits and cut losses before forcing time exits
+                
+                # Get current price from orderbook for profit/loss checks
+                try:
+                    orderbook = await self.order_book_analyzer.get_order_book(token_id, force_refresh=True)
+                    current_price = None
+                    
+                    if orderbook and orderbook.bids:
+                        current_price = orderbook.bids[0].price
+                    else:
+                        # FALLBACK: If no orderbook, use entry price (assume no change)
+                        # This prevents positions from being stuck if orderbook API fails
+                        logger.warning(f"   No orderbook for {token_id[:16]}..., using entry price as fallback")
+                        current_price = position.entry_price
+                    
+                    if current_price:
+                        # Update peak price for trailing stop
+                        if current_price > position.highest_price:
+                            position.highest_price = current_price
+                        
+                        # Calculate P&L
+                        pnl_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else Decimal("0")
+                        
+                        logger.debug(f"   {position.asset} {position.side}: P&L={pnl_pct*100:.2f}%, age={age_min:.1f}min")
+                        
+                        # Trailing stop-loss (check FIRST - highest priority)
+                        # Check if position EVER reached activation threshold (tracked in highest_price)
+                        peak_pnl = (position.highest_price - position.entry_price) / position.entry_price if position.entry_price > 0 else Decimal("0")
+                        
+                        if peak_pnl >= self.trailing_activation_pct and position.highest_price > 0:
+                            drop_from_peak = (position.highest_price - current_price) / position.highest_price
+                            if drop_from_peak >= self.trailing_stop_pct:
+                                logger.warning(f"📉 TRAILING STOP: {position.asset} {position.side}")
+                                logger.warning(f"   Peak: ${position.highest_price} -> Current: ${current_price} (dropped {drop_from_peak*100:.2f}% from peak)")
+                                success = await self._close_position(position, current_price)
+                                if success:
+                                    positions_to_close.append(token_id)
+                                    # Count as win if we're still in profit, loss if not
+                                    if pnl_pct > 0:
+                                        self.stats["trades_won"] += 1
+                                    else:
+                                        self.stats["trades_lost"] += 1
+                                    self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                                    self._record_trade_outcome(
+                                        asset=position.asset, side=position.side,
+                                        strategy=position.strategy, entry_price=position.entry_price,
+                                        exit_price=current_price, profit_pct=pnl_pct,
+                                        hold_time_minutes=age_min, exit_reason="trailing_stop"
+                                    )
+                                continue
+                        
+                        # Take profit (second priority)
+                        if pnl_pct >= self.take_profit_pct:
+                            logger.info(f"🎉 TAKE PROFIT: {position.asset} {position.side} ({pnl_pct*100:.2f}%)")
+                            success = await self._close_position(position, current_price)
+                            if success:
+                                positions_to_close.append(token_id)
+                                self.stats["trades_won"] += 1
+                                self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                                self.consecutive_wins += 1
+                                self.consecutive_losses = 0
+                                self._record_trade_outcome(
+                                    asset=position.asset, side=position.side,
+                                    strategy=position.strategy, entry_price=position.entry_price,
+                                    exit_price=current_price, profit_pct=pnl_pct,
+                                    hold_time_minutes=age_min, exit_reason="take_profit"
+                                )
+                            continue
+                        
+                        # Stop loss (third priority)
+                        if pnl_pct <= -self.stop_loss_pct:
+                            logger.warning(f"❌ STOP LOSS: {position.asset} {position.side} ({pnl_pct*100:.2f}%)")
+                            success = await self._close_position(position, current_price)
+                            if success:
+                                positions_to_close.append(token_id)
+                                self.stats["trades_lost"] += 1
+                                self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                                self.consecutive_losses += 1
+                                self.consecutive_wins = 0
+                                self._record_trade_outcome(
+                                    asset=position.asset, side=position.side,
+                                    strategy=position.strategy, entry_price=position.entry_price,
+                                    exit_price=current_price, profit_pct=pnl_pct,
+                                    hold_time_minutes=age_min, exit_reason="stop_loss"
+                                )
+                            continue
+                
+                except Exception as e:
+                    logger.error(f"   Error checking position {token_id[:16]}...: {e}")
+                    # Continue to time-based exits even if orderbook fails
+                
+                # TIME-BASED EXITS (fallback if no profit/loss exit triggered)
+                
+                # FORCE EXIT: Position older than 15 minutes (market definitely closed)
+                if age_min > 15:
+                    logger.error(f"🚨 CRITICAL: Position {position.asset} {position.side} is {age_min:.1f} min old!")
+                    logger.error(f"   Market has CLOSED - attempting emergency exit")
+                    
+                    # Try to get current price from orderbook
+                    try:
+                        orderbook = await self.order_book_analyzer.get_order_book(token_id, force_refresh=True)
+                        if orderbook and orderbook.bids:
+                            current_price = orderbook.bids[0].price
+                            logger.info(f"   Current best bid: ${current_price:.4f}")
+                        else:
+                            # No orderbook - market is closed, use entry price
+                            current_price = position.entry_price
+                            logger.warning(f"   No orderbook data - using entry price ${current_price:.4f}")
+                    except Exception as e:
+                        logger.error(f"   Failed to get orderbook: {e}")
+                        current_price = position.entry_price
+                    
+                    # Attempt to close
+                    success = await self._close_position(position, current_price)
+                    if success:
+                        positions_to_close.append(token_id)
+                        pnl_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else Decimal("0")
+                        
+                        if pnl_pct > 0:
+                            self.stats["trades_won"] += 1
+                        else:
+                            self.stats["trades_lost"] += 1
+                        
+                        self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                        
+                        self._record_trade_outcome(
+                            asset=position.asset, side=position.side,
+                            strategy=position.strategy, entry_price=position.entry_price,
+                            exit_price=current_price, profit_pct=pnl_pct,
+                            hold_time_minutes=age_min, exit_reason="emergency_exit_market_closed"
+                        )
+                    else:
+                        # Close failed - remove from tracking anyway
+                        logger.error(f"   Emergency exit FAILED - removing from tracking")
+                        positions_to_close.append(token_id)
+                        self.stats["trades_lost"] += 1
+                        self._record_trade_outcome(
+                            asset=position.asset, side=position.side,
+                            strategy=position.strategy, entry_price=position.entry_price,
+                            exit_price=position.entry_price, profit_pct=Decimal("-0.02"),
+                            hold_time_minutes=age_min, exit_reason="emergency_exit_failed"
+                        )
+                    continue
+                
+                # FORCE EXIT: Position older than 13 minutes (exit before market closes)
+                if age_min > 13:
+                    logger.warning(f"⏰ TIME EXIT: {position.asset} {position.side} (age: {age_min:.1f} min)")
+                    
+                    # Get current price from orderbook
+                    try:
+                        orderbook = await self.order_book_analyzer.get_order_book(token_id, force_refresh=True)
+                        if orderbook and orderbook.bids:
+                            current_price = orderbook.bids[0].price
+                        else:
+                            current_price = position.entry_price
+                    except:
+                        current_price = position.entry_price
+                    
+                    success = await self._close_position(position, current_price)
+                    if success:
+                        positions_to_close.append(token_id)
+                        pnl_pct = (current_price - position.entry_price) / position.entry_price if position.entry_price > 0 else Decimal("0")
+                        
+                        if pnl_pct > 0:
+                            self.stats["trades_won"] += 1
+                        else:
+                            self.stats["trades_lost"] += 1
+                        
+                        self.stats["total_profit"] += (current_price - position.entry_price) * position.size
+                        
+                        self._record_trade_outcome(
+                            asset=position.asset, side=position.side,
+                            strategy=position.strategy, entry_price=position.entry_price,
+                            exit_price=current_price, profit_pct=pnl_pct,
+                            hold_time_minutes=age_min, exit_reason="time_exit_13min"
+                        )
+                    continue
+            
+            except Exception as e:
+                logger.error(f"Error processing position {token_id[:16]}...: {e}", exc_info=True)
+        
+        # Remove closed positions
+        for token_id in positions_to_close:
+            if token_id in self.positions:
+                del self.positions[token_id]
+                logger.info(f"✅ Position {token_id[:16]}... removed from tracking")
+        
+        # Save positions after any changes
+        if positions_to_close:
+            self._save_positions()
+    
     async def check_exit_conditions(self, market: CryptoMarket) -> None:
         """
         Check if any positions should be exited.
@@ -1463,6 +1760,9 @@ class FifteenMinuteCryptoStrategy:
         CRITICAL FIX (2026-02-09):
         - Match by ASSET (BTC, ETH) not market_id (changes every 15 min!)
         - Add forced exit on market expiration
+        
+        NOTE: This is now a SECONDARY check that runs after _check_all_positions_for_exit()
+        It provides additional market-specific exit logic when markets are available.
         """
         positions_to_close = []
         now = datetime.now(timezone.utc)
@@ -1492,9 +1792,12 @@ class FifteenMinuteCryptoStrategy:
             
             logger.info(f"   Entry: ${position.entry_price} -> Current: ${current_price} (P&L: {pnl_pct * 100:.2f}%) [Peak: ${position.highest_price}]")
             
-            # PHASE 3A: Trailing stop-loss — activates once profit exceeds activation threshold
+            # PHASE 3A: Trailing stop-loss — activates once profit EVER exceeded activation threshold
             trailing_triggered = False
-            if pnl_pct >= self.trailing_activation_pct and position.highest_price > 0:
+            # Check if position EVER reached activation threshold (tracked in highest_price)
+            peak_pnl = (position.highest_price - position.entry_price) / position.entry_price if position.entry_price > 0 else Decimal("0")
+            
+            if peak_pnl >= self.trailing_activation_pct and position.highest_price > 0:
                 drop_from_peak = (position.highest_price - current_price) / position.highest_price
                 if drop_from_peak >= self.trailing_stop_pct:
                     logger.warning(f"📉 TRAILING STOP on {position.asset} {position.side}!")
@@ -1504,10 +1807,16 @@ class FifteenMinuteCryptoStrategy:
                     success = await self._close_position(position, current_price)
                     if success:
                         positions_to_close.append(token_id)
-                        self.stats["trades_won"] += 1  # Still a win since we had profit
+                        # Count as win if we're still in profit, loss if not
+                        if pnl_pct > 0:
+                            self.stats["trades_won"] += 1
+                            self.consecutive_wins += 1
+                            self.consecutive_losses = 0
+                        else:
+                            self.stats["trades_lost"] += 1
+                            self.consecutive_losses += 1
+                            self.consecutive_wins = 0
                         self.stats["total_profit"] += (current_price - position.entry_price) * position.size
-                        self.consecutive_wins += 1
-                        self.consecutive_losses = 0
                         
                         hold_mins = (datetime.now(timezone.utc) - position.entry_time).total_seconds() / 60
                         self._record_trade_outcome(
@@ -1672,7 +1981,7 @@ class FifteenMinuteCryptoStrategy:
             self.daily_trade_count += 1
             # PHASE 4A: Register position with risk manager
             self.risk_manager.add_position(market.market_id, side, price, Decimal(str(shares)))
-            # Save position to disk
+            # CRITICAL FIX: Save position to disk AFTER tracking
             self._save_positions()
             return True
         
@@ -1692,17 +2001,16 @@ class FifteenMinuteCryptoStrategy:
                 return False
             
             # Polymarket requirements
+            MIN_SHARES = 5.0  # Minimum 5 shares (CRITICAL!)
             MIN_ORDER_VALUE = 1.00  # Minimum $1.00 order value
             MIN_SIZE_PRECISION = 2  # Size must be 2 decimals
             
-            # Calculate minimum shares needed to meet $1.00 minimum
+            # Calculate minimum shares needed
             min_shares_for_value = MIN_ORDER_VALUE / price_f
-            
-            # Round DOWN to 2 decimals to stay under risk limit
-            shares_rounded = math.floor(min_shares_for_value * 100) / 100
+            min_shares_required = max(MIN_SHARES, min_shares_for_value)  # Use larger of 5 shares or $1.00 worth
             
             # Use the larger of requested shares or minimum shares
-            size_f = max(float(shares), shares_rounded)
+            size_f = max(float(shares), min_shares_required)
             
             # Round to 2 decimals (Polymarket's size precision)
             size_f = round(size_f, MIN_SIZE_PRECISION)
@@ -1825,6 +2133,7 @@ class FifteenMinuteCryptoStrategy:
             # ============================================================
             # STEP 6: Track position with ACTUAL placed size (CRITICAL FIX)
             # ============================================================
+            # ONLY save position AFTER confirming order was accepted by exchange
             
             # Use size_f (actual placed size) not shares (requested size)
             actual_size_decimal = Decimal(str(size_f))
@@ -1854,6 +2163,9 @@ class FifteenMinuteCryptoStrategy:
                 actual_size_decimal  # CRITICAL: Use actual placed size
             )
             
+            # CRITICAL FIX: Save position to disk AFTER successful order placement
+            self._save_positions()
+            
             logger.info(f"📝 Position tracked: {size_f:.2f} shares @ ${price_f:.4f}")
             
             return True
@@ -1866,6 +2178,9 @@ class FifteenMinuteCryptoStrategy:
     async def _close_position(self, position: Position, current_price: Decimal) -> bool:
         """
         Close a position by selling with comprehensive validation.
+        
+        CRITICAL FIX: Position sizes must be rounded DOWN to avoid "insufficient balance" errors.
+        Polymarket rejects orders if you try to sell 23.00 shares but only have 22.99695.
         
         Args:
             position: Position to close
@@ -1901,6 +2216,7 @@ class FifteenMinuteCryptoStrategy:
             # Import required modules
             from py_clob_client.clob_types import OrderArgs
             from py_clob_client.order_builder.constants import SELL
+            import math
             
             price_f = float(current_price)
             size_f = float(position.size)
@@ -1914,33 +2230,51 @@ class FifteenMinuteCryptoStrategy:
                 logger.error("❌ Position size is 0 or negative, cannot close position")
                 return False
             
-            # Round size to 2 decimals (Polymarket precision)
-            size_f = round(size_f, 2)
+            # CRITICAL FIX: Round size DOWN to 2 decimals to avoid "insufficient balance" errors
+            # If position.size is 22.99695, we must sell 22.99, NOT 23.00
+            # Polymarket rejects orders if you try to sell more than you have
+            size_f = math.floor(size_f * 100) / 100  # Round DOWN to 2 decimals
+            
+            logger.info(f"🔨 Creating SELL limit order:")
+            logger.info(f"   Original Size: {float(position.size):.6f} shares")
+            logger.info(f"   Rounded Size: {size_f:.2f} shares (rounded DOWN)")
+            logger.info(f"   Price: ${price_f:.4f}")
             
             # Calculate order value
             order_value = price_f * size_f
-            
-            logger.info(f"🔨 Creating SELL limit order:")
-            logger.info(f"   Size: {size_f:.2f} shares")
-            logger.info(f"   Price: ${price_f:.4f}")
             logger.info(f"   Total Value: ${order_value:.4f}")
+            
+            # CRITICAL: Check if order value is too small
+            # Polymarket might reject very small orders
+            if order_value < 0.01:  # Less than 1 cent
+                logger.warning(f"⚠️ Order value too small (${order_value:.4f})")
+                logger.warning(f"   Polymarket might reject this order")
+                logger.warning(f"   Removing position from tracking anyway")
+                return True  # Return true to remove from tracking
             
             # Create sell order
             order_args = OrderArgs(
                 token_id=position.token_id,
                 price=price_f,  # Price per share (library rounds to tick size)
-                size=size_f,    # Number of shares (already rounded to 2 decimals)
+                size=size_f,    # Number of shares (rounded DOWN to 2 decimals)
                 side=SELL,
             )
             
+            logger.info(f"✍️ Signing order...")
             signed_order = self.clob_client.create_order(order_args)
-            logger.info(f"✍️ Order signed, submitting to exchange...")
             
+            logger.info(f"📤 Posting order to exchange...")
             response = self.clob_client.post_order(signed_order)
             
             # Handle response
             if not response:
                 logger.error("❌ CLOSE FAILED: Empty response from exchange")
+                logger.error("   This might mean the order was rejected")
+                logger.error("   Common reasons:")
+                logger.error("   1. Insufficient balance (trying to sell more than you have)")
+                logger.error("   2. Market closed")
+                logger.error("   3. Invalid token ID")
+                logger.error("   4. Price out of range")
                 return False
             
             # Extract order details
@@ -1951,7 +2285,7 @@ class FifteenMinuteCryptoStrategy:
                 order_id = response.get("orderID") or response.get("order_id") or "unknown"
                 order_status = response.get("status", "unknown")
                 success = response.get("success", True)
-                error_msg = response.get("errorMsg", "")
+                error_msg = response.get("errorMsg", "") or response.get("error", "")
                 
                 logger.info(f"📨 Exchange response:")
                 logger.info(f"   Order ID: {order_id}")
@@ -1959,6 +2293,23 @@ class FifteenMinuteCryptoStrategy:
                 
                 if not success or error_msg:
                     logger.error(f"❌ CLOSE FAILED: {error_msg}")
+                    logger.error(f"   Full response: {response}")
+                    
+                    # Check for common errors
+                    if "insufficient" in error_msg.lower():
+                        logger.error("   ERROR TYPE: Insufficient balance")
+                        logger.error("   FIX: Trying to sell more shares than you have")
+                        logger.error(f"   Position size: {position.size}")
+                        logger.error(f"   Tried to sell: {size_f}")
+                    elif "closed" in error_msg.lower() or "expired" in error_msg.lower():
+                        logger.error("   ERROR TYPE: Market closed")
+                        logger.error("   FIX: Market has already expired")
+                        # Remove from tracking anyway
+                        return True
+                    elif "price" in error_msg.lower():
+                        logger.error("   ERROR TYPE: Invalid price")
+                        logger.error(f"   Price used: ${price_f:.4f}")
+                    
                     return False
             
             logger.info(f"✅ POSITION CLOSED SUCCESSFULLY: {order_id}")
@@ -1977,6 +2328,22 @@ class FifteenMinuteCryptoStrategy:
         except Exception as e:
             logger.error(f"❌ Close position error: {e}", exc_info=True)
             logger.error(f"   Position was NOT closed")
+            logger.error(f"   Exception type: {type(e).__name__}")
+            logger.error(f"   Exception details: {str(e)}")
+            
+            # Check for specific error types
+            error_str = str(e).lower()
+            if "insufficient" in error_str:
+                logger.error("   DIAGNOSIS: Trying to sell more than you have")
+                logger.error(f"   Position size: {position.size}")
+                logger.error(f"   Tried to sell: {size_f}")
+            elif "unauthorized" in error_str or "api key" in error_str:
+                logger.error("   DIAGNOSIS: API authentication failed")
+                logger.error("   Check your API credentials")
+            elif "cloudflare" in error_str or "403" in error_str:
+                logger.error("   DIAGNOSIS: Blocked by Cloudflare")
+                logger.error("   Your bot might be rate-limited")
+            
             return False
             
     async def run_cycle(self):
@@ -1989,6 +2356,11 @@ class FifteenMinuteCryptoStrategy:
                     age_min = (datetime.now(timezone.utc) - pos.entry_time).total_seconds() / 60
                     logger.info(f"   - {pos.asset} {pos.side}: entry=${pos.entry_price}, age={age_min:.1f}min")
             
+            # CRITICAL FIX: Check ALL positions for exit conditions FIRST
+            # This runs BEFORE fetching markets to ensure we always check exits
+            # even if markets have expired or API fails
+            await self._check_all_positions_for_exit()
+            
             # 1. Fetch markets
             markets = await self.fetch_15min_markets()
             
@@ -1997,7 +2369,7 @@ class FifteenMinuteCryptoStrategy:
             
             # 2. Check each market for opportunities
             for market in markets:
-                # Check exit conditions first
+                # Check exit conditions again with fresh market data
                 await self.check_exit_conditions(market)
                 
                 # If we have capacity...
@@ -2040,6 +2412,7 @@ class FifteenMinuteCryptoStrategy:
                     )
                     del self.positions[token_id]
                     self.stats["trades_lost"] += 1  # Count as loss since we couldn't exit properly
+                    self._save_positions()  # Save after removing orphan
                     
         except Exception as e:
             logger.error(f"Error in trading cycle: {e}", exc_info=True)

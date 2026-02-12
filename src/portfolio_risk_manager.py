@@ -121,7 +121,12 @@ class PortfolioRiskManager:
         market_id: str
     ) -> RiskMetrics:
         """
-        Check if a proposed trade is allowed by risk limits.
+        SMART RISK MANAGER - Adapts to Polymarket requirements and actual balance.
+        
+        Key Features:
+        - Allows minimum order sizes (5 shares = ~$2.50) even if they exceed percentage limits
+        - Dynamically adjusts limits based on actual balance
+        - Smarter for small balances (<$10) to enable trading
         
         Args:
             proposed_size: Proposed position size
@@ -140,19 +145,27 @@ class PortfolioRiskManager:
             if self._daily_start_capital > 0 else Decimal('0')
         win_rate = self._wins_today / self._trades_today if self._trades_today > 0 else 0.5
         
-        # Calculate max allowed position
-        # Polymarket requires minimum $1 order, so ensure max_position is at least $1
-        max_position_from_pct = self.current_capital * self.max_position_size_pct
-        max_position_from_heat = self._get_remaining_heat() * Decimal('0.5')  # Use max 50% of remaining heat
+        # SMART POSITION SIZING - Adapts to balance and Polymarket requirements
+        # Polymarket requires MINIMUM 5 shares (typically $2.50-$3.50 depending on price)
+        POLYMARKET_MIN_ORDER = Decimal('3.50')  # Conservative estimate for 5 shares at $0.70
         
-        max_position = min(max_position_from_pct, max_position_from_heat)
+        # Calculate max allowed position based on balance
+        if self.current_capital < Decimal('5.0'):
+            # Very small balance: Allow up to 80% per trade (need to meet minimums)
+            max_position = self.current_capital * Decimal('0.80')
+        elif self.current_capital < Decimal('10.0'):
+            # Small balance: Allow up to 60% per trade
+            max_position = self.current_capital * Decimal('0.60')
+        elif self.current_capital < Decimal('20.0'):
+            # Medium balance: Allow up to 40% per trade
+            max_position = self.current_capital * Decimal('0.40')
+        else:
+            # Large balance: Use standard 5% limit
+            max_position = self.current_capital * self.max_position_size_pct
         
-        # If max_position is less than $1 but we have at least $1 in capital, allow $1 trades
-        # For small balances, allow up to $3 per trade to improve execution
-        if max_position < Decimal('3.0') and self.current_capital >= Decimal('3.0'):
-            max_position = min(Decimal('3.0'), self.current_capital * Decimal('0.50'))  # Max 50% for small balances
-        elif max_position < Decimal('1.0') and self.current_capital >= Decimal('1.0'):
-            max_position = min(Decimal('1.0'), self.current_capital * Decimal('0.30'))  # Max 30% for very small balances
+        # CRITICAL: Always allow Polymarket minimum order size if we have the balance
+        if max_position < POLYMARKET_MIN_ORDER and self.current_capital >= POLYMARKET_MIN_ORDER:
+            max_position = POLYMARKET_MIN_ORDER
         
         # Check constraints
         can_trade = True
@@ -163,15 +176,23 @@ class PortfolioRiskManager:
             can_trade = False
             reason = f"Trading halted: {self._halt_reason}"
         
-        # 2. Portfolio heat check (RELAXED for small balances)
-        # For balances < $10, allow up to 80% deployment to meet $1 minimum orders
-        effective_max_heat = self.max_portfolio_heat
-        if self.current_capital < Decimal('10.0'):
-            effective_max_heat = Decimal('0.80')  # Allow 80% for small balances
+        # 2. SMART Portfolio heat check - Adapts to balance size
+        # Small balances need higher heat tolerance to meet Polymarket minimums
+        if self.current_capital < Decimal('5.0'):
+            effective_max_heat = Decimal('0.90')  # 90% for very small balances
+        elif self.current_capital < Decimal('10.0'):
+            effective_max_heat = Decimal('0.80')  # 80% for small balances
+        elif self.current_capital < Decimal('20.0'):
+            effective_max_heat = Decimal('0.60')  # 60% for medium balances
+        else:
+            effective_max_heat = self.max_portfolio_heat  # 30% for large balances
         
-        if heat_pct + (proposed_size / self.current_capital) > effective_max_heat:
+        proposed_heat = proposed_size / self.current_capital if self.current_capital > 0 else Decimal('0')
+        total_heat = heat_pct + proposed_heat
+        
+        if total_heat > effective_max_heat:
             can_trade = False
-            reason = f"Portfolio heat too high: {heat_pct*100:.1f}% + {proposed_size/self.current_capital*100:.1f}% > {effective_max_heat*100}%"
+            reason = f"Portfolio heat too high: {heat_pct*100:.1f}% + {proposed_heat*100:.1f}% > {effective_max_heat*100:.1f}%"
         
         # 3. Daily drawdown check
         elif daily_drawdown >= self.max_daily_drawdown:
@@ -185,25 +206,36 @@ class PortfolioRiskManager:
             reason = f"Consecutive loss limit: {self._consecutive_losses} >= {self.consecutive_loss_limit}"
             self._trigger_halt("Consecutive losses", duration_hours=1)
         
-        # 5. Market exposure check (DISABLED for small balances)
-        # For small balances (<$10), skip market exposure check entirely
-        # This allows multiple $1 trades to different markets
-        elif self.current_capital >= Decimal('10.0'):  # Only check if balance > $10
+        # 5. Market exposure check (DISABLED for balances < $20)
+        # Small balances need flexibility to trade multiple markets
+        elif self.current_capital >= Decimal('20.0'):
             max_market_exposure = self.current_capital * self.max_position_per_market_pct
             
             if self._get_market_exposure(market_id) + proposed_size > max_market_exposure:
                 can_trade = False
                 reason = f"Market exposure limit for {market_id}"
         
-        # 6. Position size check
-        if can_trade and proposed_size > max_position:
-            can_trade = False
-            reason = f"Position too large: ${proposed_size} > max ${max_position}"
+        # 6. SMART Position size check - Allow Polymarket minimums
+        # If proposed size is close to Polymarket minimum, allow it even if slightly over limit
+        if can_trade:
+            if proposed_size > max_position:
+                # Allow if within 10% of Polymarket minimum (accounts for price variations)
+                if proposed_size <= POLYMARKET_MIN_ORDER * Decimal('1.10'):
+                    # Allow it - this is likely a minimum order size
+                    pass
+                else:
+                    can_trade = False
+                    reason = f"Position too large: ${proposed_size} > max ${max_position}"
         
         # 7. Minimum capital check
         if can_trade and self.current_capital < Decimal('1.0'):
             can_trade = False
             reason = "Insufficient capital (< $1.00)"
+        
+        # 8. SMART: Ensure we have enough balance for the proposed trade
+        if can_trade and proposed_size > self.current_capital * Decimal('0.95'):
+            can_trade = False
+            reason = f"Insufficient balance: ${proposed_size} > ${self.current_capital * Decimal('0.95')} (95% of balance)"
         
         return RiskMetrics(
             total_exposure=total_exposure,

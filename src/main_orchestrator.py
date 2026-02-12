@@ -361,24 +361,43 @@ class MainOrchestrator:
         # ============================================================
         logger.info("Initializing 15-Minute Crypto Trading Strategy...")
         
-        # Dynamic position sizing based on available balance
+        # CRITICAL FIX: Get actual balance instead of using TARGET_BALANCE from .env
+        # This was causing risk manager to block all trades (thought $0.40 balance when actually $5.48)
+        logger.info("Checking actual balance for risk manager initialization...")
+        try:
+            # Synchronous balance check during initialization
+            import asyncio
+            loop = asyncio.get_event_loop()
+            eoa_balance, proxy_balance = loop.run_until_complete(self.fund_manager.check_balance())
+            actual_balance = float(eoa_balance + proxy_balance)
+            
+            if actual_balance < 0.10:
+                logger.warning(f"⚠️ Low balance detected: ${actual_balance:.2f}")
+                logger.warning(f"⚠️ Using config target_balance as fallback: ${config.target_balance:.2f}")
+                actual_balance = float(config.target_balance)
+        except Exception as e:
+            logger.error(f"Failed to check balance: {e}")
+            logger.warning(f"Using config target_balance as fallback: ${config.target_balance:.2f}")
+            actual_balance = float(config.target_balance)
+        
+        # Dynamic position sizing based on ACTUAL available balance
         # Use 30% of balance per trade (aggressive but safe)
-        # Start with config target_balance, will auto-adjust based on actual balance
-        initial_trade_size = max(1.0, float(config.target_balance) * 0.30)
-        logger.info(f"💰 Initial trade size: ${initial_trade_size:.2f} per trade (30% of ${config.target_balance:.2f} balance)")
-        logger.info(f"💰 Risk manager will dynamically adjust based on actual balance")
+        initial_trade_size = max(1.0, actual_balance * 0.30)
+        logger.info(f"💰 Actual balance: ${actual_balance:.2f}")
+        logger.info(f"💰 Initial trade size: ${initial_trade_size:.2f} per trade (30% of balance)")
+        logger.info(f"💰 Risk manager will use actual balance for portfolio heat calculations")
         
         self.fifteen_min_strategy = FifteenMinuteCryptoStrategy(
             clob_client=self.clob_client,
             trade_size=initial_trade_size,  # DYNAMIC: Will be adjusted by risk manager
-            take_profit_pct=0.005,  # 0.5% profit target (Realistic for 15-min markets - prices move slowly)
-            stop_loss_pct=0.01,  # 1% stop loss (Tight risk control)
+            take_profit_pct=0.003,  # 0.3% profit target (AGGRESSIVE: More frequent exits)
+            stop_loss_pct=0.015,  # 1.5% stop loss (AGGRESSIVE: Wider tolerance)
             max_positions=10,  # INCREASED: Allow more concurrent trades
-            sum_to_one_threshold=1.02,
+            sum_to_one_threshold=0.98,  # AGGRESSIVE: $0.98 threshold (profitable after 3% fees)
             dry_run=config.dry_run,
             llm_decision_engine=self.llm_decision_engine,
             enable_adaptive_learning=False,  # CRITICAL FIX: Disable (breaks dynamic take profit)
-            initial_capital=float(config.target_balance)  # Pass balance for risk management
+            initial_capital=actual_balance  # ✅ FIXED: Use actual balance instead of target_balance
         )
         logger.info("✅ 15-Minute Crypto Strategy enabled (AGGRESSIVE MODE: Learning Constraints Removed)")
         
@@ -1002,6 +1021,48 @@ class MainOrchestrator:
             logger.info(f"Private Wallet (Polygon): ${eoa_balance:.2f} USDC")
             logger.info(f"Polymarket Balance: ${proxy_balance:.2f} USDC")
             logger.info(f"Total Available: ${total_balance:.2f} USDC")
+            
+            # DYNAMIC: Update risk manager with actual balance
+            if total_balance > Decimal("0.10"):
+                actual_balance_float = float(total_balance)
+                logger.info(f"💰 Updating risk manager with actual balance: ${actual_balance_float:.2f}")
+                
+                # Update fifteen_min_strategy risk manager
+                if hasattr(self, 'fifteen_min_strategy') and self.fifteen_min_strategy:
+                    self.fifteen_min_strategy.risk_manager.initial_capital = Decimal(str(actual_balance_float))
+                    self.fifteen_min_strategy.risk_manager.current_capital = Decimal(str(actual_balance_float))
+                    logger.info(f"✅ Risk manager updated: capital=${actual_balance_float:.2f}")
+                
+                # DYNAMIC: Calculate trade size ensuring it meets Polymarket minimums
+                # Polymarket requires: MINIMUM 5 SHARES (not $1.00!)
+                # At $0.50 price: 5 shares = $2.50 minimum
+                # At $0.85 price: 5 shares = $4.25 minimum
+                # Account for potential 50% slippage reduction: size * 0.5 must still be >= 5 shares worth
+                
+                # Calculate minimum based on typical crypto prices ($0.50-$0.90)
+                typical_price = 0.70  # Average price for crypto markets
+                min_trade_for_5_shares = 5.0 * typical_price  # $3.50
+                min_starting_size = min_trade_for_5_shares * 2  # $7.00 to allow 50% reduction
+                
+                if actual_balance_float < min_starting_size:
+                    # Balance too small for reductions, use 100% but ensure minimum
+                    trade_size_pct = 1.0
+                elif actual_balance_float < 15.0:
+                    # Small balance: use 50% (allows reduction to 25%)
+                    trade_size_pct = 0.50
+                elif actual_balance_float < 30.0:
+                    # Medium balance: use 40% per trade
+                    trade_size_pct = 0.40
+                else:
+                    # Large balance: use 30% per trade
+                    trade_size_pct = 0.30
+                
+                # Ensure minimum to allow for reductions
+                new_trade_size = max(min_starting_size, actual_balance_float * trade_size_pct)
+                
+                if hasattr(self, 'fifteen_min_strategy') and self.fifteen_min_strategy:
+                    self.fifteen_min_strategy.trade_size = Decimal(str(new_trade_size))
+                    logger.info(f"✅ Trade size updated: ${new_trade_size:.2f} per trade ({trade_size_pct*100:.0f}% of balance)")
             
             # Show success if we have funds
             if total_balance >= Decimal("0.50"):

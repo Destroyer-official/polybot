@@ -1,0 +1,19 @@
+# Commands to run on your LOCAL machine (PowerShell)
+
+# 1. Upload the fixed files
+scp -i money.pem src/fifteen_min_crypto_strategy.py ubuntu@35.76.113.47:/home/ubuntu/polybot/src/
+scp -i money.pem src/ensemble_decision_engine.py ubuntu@35.76.113.47:/home/ubuntu/polybot/src/
+
+# 2. SSH into AWS and restart bot
+ssh -i money.pem ubuntu@35.76.113.47
+
+# Then run these commands ON AWS:
+cd ~/polybot
+sudo systemctl restart polybot
+sudo systemctl status polybot --no-pager
+sudo journalctl -u polybot -f
+
+# Watch for these log messages:
+# ✅ "🎯 ENSEMBLE APPROVED: buy_yes | Confidence: 56.7%"
+# ✅ "⚠️ High slippage but PROFITABLE trade - executing"
+# ✅ "✅ Placed order: BUY YES"
