@@ -349,12 +349,12 @@ class MainOrchestrator:
         logger.info("Initializing Portfolio Risk Manager...")
         self.portfolio_risk_manager = PortfolioRiskManager(
             initial_capital=config.target_balance,  # Starting capital estimate
-            max_portfolio_heat=Decimal('0.30'),  # Max 30% deployed
-            max_daily_drawdown=Decimal('0.10'),  # 10% daily loss limit
-            max_position_size_pct=Decimal('0.05'),  # 5% per trade
-            consecutive_loss_limit=3  # Halt after 3 consecutive losses
+            max_portfolio_heat=Decimal('1.50'),  # Max 150% deployed (FIXED: was 30%, too restrictive)
+            max_daily_drawdown=Decimal('0.15'),  # 15% daily loss limit (FIXED: was 10%)
+            max_position_size_pct=Decimal('0.80'),  # 80% per trade (FIXED: was 5%, too restrictive)
+            consecutive_loss_limit=5  # Halt after 5 consecutive losses (FIXED: was 3)
         )
-        logger.info("✅ Portfolio Risk Manager enabled")
+        logger.info("✅ Portfolio Risk Manager enabled (OPTIMIZED: More permissive limits)")
         
         # ============================================================
         # 15-MINUTE CRYPTO STRATEGY - BTC/ETH Up/Down Trading
@@ -381,25 +381,25 @@ class MainOrchestrator:
             actual_balance = float(config.target_balance)
         
         # Dynamic position sizing based on ACTUAL available balance
-        # Use 30% of balance per trade (aggressive but safe)
-        initial_trade_size = max(1.0, actual_balance * 0.30)
+        # Use 50% of balance per trade (balanced approach)
+        initial_trade_size = max(3.0, min(actual_balance * 0.50, 10.0))  # Between $3-$10
         logger.info(f"💰 Actual balance: ${actual_balance:.2f}")
-        logger.info(f"💰 Initial trade size: ${initial_trade_size:.2f} per trade (30% of balance)")
+        logger.info(f"💰 Initial trade size: ${initial_trade_size:.2f} per trade (50% of balance, capped at $10)")
         logger.info(f"💰 Risk manager will use actual balance for portfolio heat calculations")
         
         self.fifteen_min_strategy = FifteenMinuteCryptoStrategy(
             clob_client=self.clob_client,
             trade_size=initial_trade_size,  # DYNAMIC: Will be adjusted by risk manager
-            take_profit_pct=0.003,  # 0.3% profit target (AGGRESSIVE: More frequent exits)
-            stop_loss_pct=0.015,  # 1.5% stop loss (AGGRESSIVE: Wider tolerance)
-            max_positions=10,  # INCREASED: Allow more concurrent trades
+            take_profit_pct=0.02,  # 2% profit target (OPTIMIZED: Bigger profits)
+            stop_loss_pct=0.02,  # 2% stop loss (BALANCED: Control losses)
+            max_positions=5,  # OPTIMIZED: Allow more concurrent trades
             sum_to_one_threshold=0.98,  # AGGRESSIVE: $0.98 threshold (profitable after 3% fees)
             dry_run=config.dry_run,
             llm_decision_engine=self.llm_decision_engine,
             enable_adaptive_learning=False,  # CRITICAL FIX: Disable (breaks dynamic take profit)
             initial_capital=actual_balance  # ✅ FIXED: Use actual balance instead of target_balance
         )
-        logger.info("✅ 15-Minute Crypto Strategy enabled (AGGRESSIVE MODE: Learning Constraints Removed)")
+        logger.info("✅ 15-Minute Crypto Strategy enabled (OPTIMIZED: Better profit targets, actual balance tracking)")
         
         # Timing trackers
         self.last_heartbeat = time.time()

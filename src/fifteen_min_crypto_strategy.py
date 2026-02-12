@@ -346,7 +346,7 @@ class FifteenMinuteCryptoStrategy:
             rl_engine=self.rl_engine,
             historical_tracker=self.success_tracker,
             multi_tf_analyzer=self.multi_tf_analyzer,
-            min_consensus=0.0  # ULTRA AGGRESSIVE: Take ANY trade with positive confidence
+            min_consensus=5.0  # OPTIMIZED: Lower from 15% to 5% for more trades
         )
         
         # PHASE 3: Context Optimizer (40% faster LLM responses)
@@ -2230,10 +2230,24 @@ class FifteenMinuteCryptoStrategy:
                 logger.error("❌ Position size is 0 or negative, cannot close position")
                 return False
             
-            # CRITICAL FIX: Round size DOWN to 2 decimals to avoid "insufficient balance" errors
-            # If position.size is 22.99695, we must sell 22.99, NOT 23.00
-            # Polymarket rejects orders if you try to sell more than you have
-            size_f = math.floor(size_f * 100) / 100  # Round DOWN to 2 decimals
+            # CRITICAL FIX: Query ACTUAL token balance from blockchain
+            # The tracked size might be 5.00, but actual balance could be 4.99695
+            # due to rounding/fees during the buy. This causes "insufficient balance" errors.
+            logger.info(f"🔍 Querying actual token balance for {position.token_id[:16]}...")
+            actual_balance = await self._get_actual_token_balance(position.token_id)
+            
+            if actual_balance is not None and actual_balance > 0:
+                logger.info(f"   Tracked size: {size_f:.6f} shares")
+                logger.info(f"   Actual balance: {float(actual_balance):.6f} shares")
+                
+                # Use actual balance (floor to 2 decimals to avoid dust)
+                size_f = math.floor(float(actual_balance) * 100) / 100
+                logger.info(f"   Using actual balance (floored): {size_f:.2f} shares")
+            else:
+                # Fallback: Round tracked size DOWN to 2 decimals
+                logger.warning(f"⚠️ Could not query actual balance, using tracked size")
+                size_f = math.floor(size_f * 100) / 100  # Round DOWN to 2 decimals
+                logger.info(f"   Using tracked size (floored): {size_f:.2f} shares")
             
             logger.info(f"🔨 Creating SELL limit order:")
             logger.info(f"   Original Size: {float(position.size):.6f} shares")
@@ -2345,7 +2359,72 @@ class FifteenMinuteCryptoStrategy:
                 logger.error("   Your bot might be rate-limited")
             
             return False
+    
+    async def _get_actual_token_balance(self, token_id: str) -> Optional[Decimal]:
+        """
+        Query the ACTUAL token balance from the blockchain.
+        
+        CRITICAL: This solves the "not enough balance" error when selling.
+        The bot tracks 5.00 shares, but you might only have 4.99695 shares
+        due to rounding/fees during the buy. This queries the real balance.
+        
+        Args:
+            token_id: The ERC1155 token ID
             
+        Returns:
+            Actual token balance as Decimal, or None if query fails
+        """
+        try:
+            from web3 import Web3
+            from decimal import Decimal
+            
+            # Polygon RPC endpoint
+            RPC_URL = "https://polygon-rpc.com"
+            
+            # CTF Exchange contract address (holds the tokens)
+            CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+            
+            # ERC1155 ABI (just the balanceOf function)
+            ERC1155_ABI = [
+                {
+                    "inputs": [
+                        {"internalType": "address", "name": "account", "type": "address"},
+                        {"internalType": "uint256", "name": "id", "type": "uint256"}
+                    ],
+                    "name": "balanceOf",
+                    "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+                    "stateMutability": "view",
+                    "type": "function"
+                }
+            ]
+            
+            # Get wallet address from CLOB client
+            wallet_address = self.clob_client.get_address()
+            
+            # Connect to Polygon
+            w3 = Web3(Web3.HTTPProvider(RPC_URL))
+            
+            # Get CTF contract
+            ctf_contract = w3.eth.contract(address=CTF_EXCHANGE, abi=ERC1155_ABI)
+            
+            # Query balance
+            balance_raw = ctf_contract.functions.balanceOf(
+                wallet_address,
+                int(token_id)
+            ).call()
+            
+            # Convert to decimal (tokens have 6 decimals like USDC)
+            balance = Decimal(balance_raw) / Decimal('1000000')
+            
+            logger.info(f"📊 Actual token balance from blockchain: {balance:.6f} shares")
+            
+            return balance
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to query actual token balance: {e}")
+            logger.warning(f"   Will use tracked size as fallback")
+            return None
+    
     async def run_cycle(self):
         """Run one trading cycle."""
         try:
