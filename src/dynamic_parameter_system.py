@@ -59,7 +59,7 @@ class DynamicParameterSystem:
         max_fractional_kelly: float = 0.50,
         performance_window: int = 20,
         transaction_cost_pct: Decimal = Decimal('0.02'),  # 2% for fees + slippage
-        min_edge_threshold: Decimal = Decimal('0.025'),  # 2.5% minimum edge
+        min_edge_threshold: Decimal = Decimal('0.005'),  # 0.5% minimum edge (LOWERED: allows trading with stop-loss protection)
         max_position_pct: Decimal = Decimal('0.20'),  # 20% max of bankroll
         min_position_size: Decimal = Decimal('0.10')  # $0.10 minimum
     ):
@@ -71,7 +71,7 @@ class DynamicParameterSystem:
             max_fractional_kelly: Maximum fractional Kelly (default: 0.50 = 50%)
             performance_window: Number of recent trades to track (default: 20)
             transaction_cost_pct: Transaction costs as percentage (default: 2%)
-            min_edge_threshold: Minimum edge required to trade (default: 2.5%)
+            min_edge_threshold: Minimum edge required to trade (default: 0.5% - LOWERED to allow trading with stop-loss protection)
             max_position_pct: Maximum position as % of bankroll (default: 20%)
             min_position_size: Minimum position size in USD (default: $0.10)
         """

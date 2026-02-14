@@ -463,13 +463,13 @@ class FifteenMinuteCryptoStrategy:
             min_fractional_kelly=0.25,  # 25% for normal confidence
             max_fractional_kelly=0.50,  # 50% for high confidence
             transaction_cost_pct=Decimal('0.0315'),  # 3.15% (3% fee + 0.15% slippage)
-            min_edge_threshold=Decimal('0.02'),  # 2% minimum edge after costs
+            min_edge_threshold=Decimal('0.005'),  # 0.5% minimum edge (LOWERED: allows trading with stop-loss protection)
             max_position_pct=Decimal('0.10'),  # 10% max of balance
             min_position_size=Decimal('1.00')  # $1.00 minimum
         )
         # Keep reference for backward compatibility
         self.kelly_system = self.dynamic_params
-        logger.info("📊 Dynamic Parameter System with Kelly Criterion enabled")
+        logger.info("📊 Dynamic Parameter System with Kelly Criterion enabled (min_edge=0.5%)")
         
         # NEW: Adaptive Learning Engine
         self.adaptive_learning = None
@@ -2545,13 +2545,13 @@ class FifteenMinuteCryptoStrategy:
         # Calculate recent volatility/change from Binance if available
         change_10s = self.binance_feed.get_price_change(market.asset, seconds=10)
         
-        # REQUIREMENT 3.10: Require > 0.1% momentum in trade direction
-        # Determine Binance momentum - REQUIREMENT: 0.1% threshold
+        # REQUIREMENT 3.10: Require > 0.05% momentum in trade direction (LOWERED: was 0.1%)
+        # Determine Binance momentum - REQUIREMENT: 0.05% threshold (allows trading with stop-loss protection)
         binance_momentum = "neutral"
         if change_10s:
-            if change_10s > Decimal("0.001"):  # 0.1% = 0.001
+            if change_10s > Decimal("0.0005"):  # 0.05% = 0.0005 (LOWERED: was 0.001)
                 binance_momentum = "bullish"
-            elif change_10s < Decimal("-0.001"):  # -0.1% = -0.001
+            elif change_10s < Decimal("-0.0005"):  # -0.05% = -0.0005 (LOWERED: was -0.001)
                 binance_momentum = "bearish"
         
         # Get current Binance price
@@ -2687,7 +2687,7 @@ class FifteenMinuteCryptoStrategy:
                     if binance_momentum != "bullish":
                         logger.warning(f"⏭️ MOMENTUM CHECK FAILED: Want to buy YES but momentum is {binance_momentum}")
                         logger.warning(f"   Price change (10s): {change_10s if change_10s else 'N/A'}")
-                        logger.warning(f"   Required: > 0.1% bullish momentum")
+                        logger.warning(f"   Required: > 0.05% bullish momentum")
                         return False
                     logger.info(f"✅ MOMENTUM CHECK PASSED: Bullish momentum ({change_10s:.4%}) supports YES trade")
                 elif ensemble_decision.action == "buy_no":
@@ -2695,7 +2695,7 @@ class FifteenMinuteCryptoStrategy:
                     if binance_momentum != "bearish":
                         logger.warning(f"⏭️ MOMENTUM CHECK FAILED: Want to buy NO but momentum is {binance_momentum}")
                         logger.warning(f"   Price change (10s): {change_10s if change_10s else 'N/A'}")
-                        logger.warning(f"   Required: > 0.1% bearish momentum")
+                        logger.warning(f"   Required: > 0.05% bearish momentum")
                         return False
                     logger.info(f"✅ MOMENTUM CHECK PASSED: Bearish momentum ({change_10s:.4%}) supports NO trade")
                 elif ensemble_decision.action == "buy_both":
@@ -2836,7 +2836,7 @@ class FifteenMinuteCryptoStrategy:
                         if binance_momentum != "bullish":
                             logger.warning(f"⏭️ MOMENTUM CHECK FAILED: Want to buy YES (converted from buy_both) but momentum is {binance_momentum}")
                             logger.warning(f"   Price change (10s): {change_10s if change_10s else 'N/A'}")
-                            logger.warning(f"   Required: > 0.1% bullish momentum")
+                            logger.warning(f"   Required: > 0.05% bullish momentum")
                             return False
                         logger.info(f"   Choosing YES (cheaper at ${market.up_price:.3f})")
                         logger.info(f"✅ MOMENTUM CHECK PASSED: Bullish momentum ({change_10s:.4%}) supports YES trade")
@@ -2854,7 +2854,7 @@ class FifteenMinuteCryptoStrategy:
                         if binance_momentum != "bearish":
                             logger.warning(f"⏭️ MOMENTUM CHECK FAILED: Want to buy NO (converted from buy_both) but momentum is {binance_momentum}")
                             logger.warning(f"   Price change (10s): {change_10s if change_10s else 'N/A'}")
-                            logger.warning(f"   Required: > 0.1% bearish momentum")
+                            logger.warning(f"   Required: > 0.05% bearish momentum")
                             return False
                         logger.info(f"   Choosing NO (cheaper at ${market.down_price:.3f})")
                         logger.info(f"✅ MOMENTUM CHECK PASSED: Bearish momentum ({change_10s:.4%}) supports NO trade")

@@ -62,7 +62,7 @@ class AISafetyGuard:
         self,
         nvidia_api_key: str,
         nvidia_api_url: str = "https://integrate.api.nvidia.com/v1",
-        min_balance: Decimal = Decimal('10.0'),
+        min_balance: Decimal = Decimal('0.10'),  # Dynamic: $0.10 minimum for micro trading
         max_gas_price_gwei: int = 800,
         max_pending_tx: int = 5,
         volatility_threshold: Decimal = Decimal('0.05'),  # 5%
@@ -74,7 +74,7 @@ class AISafetyGuard:
         Args:
             nvidia_api_key: API key for NVIDIA AI service
             nvidia_api_url: NVIDIA API endpoint URL
-            min_balance: Minimum balance required for trading (default $10)
+            min_balance: Minimum balance required for trading (default $0.10, dynamic)
             max_gas_price_gwei: Maximum gas price in gwei (default 800)
             max_pending_tx: Maximum pending transactions (default 5)
             volatility_threshold: Volatility threshold for halting (default 5%)

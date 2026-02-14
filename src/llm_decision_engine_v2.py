@@ -652,14 +652,24 @@ DECISION CRITERIA FOR 15-MIN MARKETS:
             }
             order_type = order_type_map.get(data.get("order_type", "market"), OrderType.MARKET)
             
-            # Calculate position size
-            position_size_pct = min(
-                float(data.get("position_size_pct", 2.0)),
-                self.max_position_pct
-            )
+            # Calculate position size (handle null values when action is skip)
+            position_size_pct_raw = data.get("position_size_pct")
+            if position_size_pct_raw is None or position_size_pct_raw == "null":
+                position_size_pct = 2.0  # Default
+            else:
+                position_size_pct = min(
+                    float(position_size_pct_raw),
+                    self.max_position_pct
+                )
             position_size = portfolio_state.available_balance * Decimal(str(position_size_pct / 100))
             
-            # Build decision
+            # Build decision (handle null values)
+            expected_profit_raw = data.get("expected_profit_pct")
+            if expected_profit_raw is None or expected_profit_raw == "null":
+                expected_profit = Decimal("0")
+            else:
+                expected_profit = Decimal(str(expected_profit_raw)) / 100
+            
             decision = TradeDecision(
                 action=action,
                 confidence=float(data.get("confidence", 0)),
@@ -668,7 +678,7 @@ DECISION CRITERIA FOR 15-MIN MARKETS:
                 limit_price=Decimal(str(data.get("limit_price"))) if data.get("limit_price") else None,
                 reasoning=data.get("reasoning", "No reasoning provided"),
                 risk_assessment=data.get("risk_assessment", "unknown"),
-                expected_profit=Decimal(str(data.get("expected_profit_pct", 0))) / 100
+                expected_profit=expected_profit
             )
             
             return decision

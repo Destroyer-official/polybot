@@ -781,9 +781,11 @@ class MainOrchestrator:
                 # Proxy wallet detected - skip balance validation
                 balance_ok = True
             else:
-                balance_ok = total_balance >= Decimal("10.0")
+                # Dynamic minimum: $0.10 for micro trading (allows any balance above dust)
+                dynamic_min = Decimal("0.10")
+                balance_ok = total_balance >= dynamic_min
                 if not balance_ok:
-                    issues.append(f"Low balance: ${total_balance:.2f} (min: $10.00)")
+                    issues.append(f"Low balance: ${total_balance:.2f} (min: ${dynamic_min})")
         except Exception as e:
             logger.error(f"Failed to check balance: {e}")
             eoa_balance = proxy_balance = total_balance = Decimal("0")

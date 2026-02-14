@@ -49,10 +49,10 @@ class Config:
     max_gas_price_gwei: int = 800
     circuit_breaker_threshold: int = 10
     
-    # Fund management
-    min_balance: Decimal = Decimal("50.0")
-    target_balance: Decimal = Decimal("100.0")
-    withdraw_limit: Decimal = Decimal("500.0")
+    # Fund management (dynamic based on actual balance)
+    min_balance: Decimal = Decimal("0.10")  # Minimum $0.10 for micro trading
+    target_balance: Decimal = Decimal("10.0")  # Target $10 after deposit
+    withdraw_limit: Decimal = Decimal("100.0")  # Withdraw threshold $100
     
     # Monitoring
     cloudwatch_log_group: str = "/polymarket-arbitrage-bot"

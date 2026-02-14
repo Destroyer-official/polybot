@@ -96,9 +96,9 @@ class FundManager:
             wallet: Wallet account for signing transactions
             usdc_address: USDC contract address on Polygon
             ctf_exchange_address: CTF Exchange contract address
-            min_balance: Minimum balance threshold for auto-deposit ($50)
-            target_balance: Target balance after deposit ($100)
-            withdraw_limit: Balance threshold for auto-withdrawal ($500)
+            min_balance: Minimum balance threshold (dynamic, default $0.10)
+            target_balance: Target balance after deposit (dynamic, default $10)
+            withdraw_limit: Balance threshold for auto-withdrawal (dynamic, default $100)
             dry_run: If True, log actions but don't execute transactions
             oneinch_api_key: API key for 1inch aggregator (optional)
         """
