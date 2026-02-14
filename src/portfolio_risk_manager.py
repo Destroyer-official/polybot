@@ -108,6 +108,12 @@ class PortfolioRiskManager:
         self._halt_reason = ""
         self._halt_until: Optional[datetime] = None
         
+        # Conservative mode (Task 6.5)
+        self._conservative_mode_active = False
+        self._conservative_mode_activation_time: Optional[datetime] = None
+        self._conservative_mode_starting_balance = initial_capital
+        self._conservative_mode_min_confidence = Decimal('0.80')  # 80% confidence required
+        
         logger.info(
             f"Portfolio Risk Manager initialized: "
             f"capital=${initial_capital}, "
@@ -278,6 +284,11 @@ class PortfolioRiskManager:
         if market_id in self._positions:
             del self._positions[market_id]
         
+        # Task 6.5: Check conservative mode activation/deactivation after balance change
+        self._check_conservative_mode_activation()
+        self._check_conservative_mode_deactivation()
+
+        
         logger.info(
             f"Trade recorded: profit=${profit}, "
             f"daily_pnl=${self._daily_pnl}, "
@@ -376,8 +387,40 @@ class PortfolioRiskManager:
                 logger.info("Trading halt expired, resuming")
     
     def _check_daily_reset(self):
-        """Check if daily metrics should be reset."""
+        """
+        Check if daily metrics should be reset.
+        
+        Task 6.7: Implement daily automatic reset
+        - Reset daily counters at UTC midnight
+        - Update starting balance
+        - Reset daily P&L
+        - Check if should exit conservative mode
+        - Log daily performance summary
+        
+        Validates Requirement 7.2: Daily automatic reset at UTC midnight
+        """
         if datetime.now() >= self._daily_reset_time:
+            # Calculate daily performance metrics before reset
+            daily_win_rate = (self._wins_today / self._trades_today * 100) if self._trades_today > 0 else 0.0
+            daily_roi = (self._daily_pnl / self._daily_start_capital * 100) if self._daily_start_capital > 0 else 0.0
+            
+            # Log comprehensive daily performance summary
+            logger.info("=" * 80)
+            logger.info("DAILY PERFORMANCE SUMMARY")
+            logger.info("=" * 80)
+            logger.info(f"Date: {datetime.now().strftime('%Y-%m-%d')}")
+            logger.info(f"Total Trades: {self._trades_today}")
+            logger.info(f"Wins: {self._wins_today} | Losses: {self._losses_today}")
+            logger.info(f"Win Rate: {daily_win_rate:.1f}%")
+            logger.info(f"Daily P&L: ${self._daily_pnl:.2f}")
+            logger.info(f"Daily ROI: {daily_roi:.2f}%")
+            logger.info(f"Starting Balance: ${self._daily_start_capital:.2f}")
+            logger.info(f"Ending Balance: ${self.current_capital:.2f}")
+            logger.info(f"Conservative Mode: {'ACTIVE' if self._conservative_mode_active else 'INACTIVE'}")
+            logger.info(f"Circuit Breaker: {'OPEN' if self._trading_halted else 'CLOSED'}")
+            logger.info("=" * 80)
+            
+            # Reset daily counters
             self._daily_start_capital = self.current_capital
             self._trades_today = 0
             self._wins_today = 0
@@ -390,8 +433,75 @@ class PortfolioRiskManager:
             if self._trading_halted and "daily" in self._halt_reason.lower():
                 self._trading_halted = False
                 self._halt_reason = ""
+                logger.info("Daily trading halt cleared - resuming trading")
             
-            logger.info("Daily metrics reset")
+            # Task 6.5: Check if should exit conservative mode on daily reset
+            self._check_conservative_mode_deactivation()
+            
+            logger.info("Daily metrics reset complete - new trading day started")
+    
+    def _check_conservative_mode_activation(self):
+        """
+        Task 6.5: Check if should activate conservative mode.
+        Activates when balance drops below 20% of starting balance.
+        """
+        if not self._conservative_mode_active:
+            threshold = self._conservative_mode_starting_balance * Decimal('0.20')
+            if self.current_capital < threshold:
+                self._conservative_mode_active = True
+                self._conservative_mode_activation_time = datetime.now()
+                logger.warning(
+                    f"🚨 CONSERVATIVE MODE ACTIVATED: "
+                    f"Balance ${self.current_capital:.2f} < 20% of starting ${self._conservative_mode_starting_balance:.2f} "
+                    f"(threshold: ${threshold:.2f}). "
+                    f"Now requiring {self._conservative_mode_min_confidence*100:.0f}%+ confidence for all trades."
+                )
+                return True
+        return False
+    
+    def _check_conservative_mode_deactivation(self):
+        """
+        Task 6.5: Check if should deactivate conservative mode.
+        Deactivates when balance recovers to 50%+ of starting balance.
+        """
+        if self._conservative_mode_active:
+            threshold = self._conservative_mode_starting_balance * Decimal('0.50')
+            if self.current_capital >= threshold:
+                duration = datetime.now() - self._conservative_mode_activation_time if self._conservative_mode_activation_time else timedelta(0)
+                self._conservative_mode_active = False
+                self._conservative_mode_activation_time = None
+                logger.info(
+                    f"✅ CONSERVATIVE MODE DEACTIVATED: "
+                    f"Balance ${self.current_capital:.2f} recovered to 50%+ of starting ${self._conservative_mode_starting_balance:.2f} "
+                    f"(threshold: ${threshold:.2f}). "
+                    f"Conservative mode was active for {duration}. "
+                    f"Resuming normal trading."
+                )
+                return True
+        return False
+    
+    def check_confidence_requirement(self, confidence: Decimal) -> tuple[bool, str]:
+        """
+        Task 6.5: Check if trade confidence meets conservative mode requirements.
+        
+        Args:
+            confidence: Trade confidence (0-100)
+            
+        Returns:
+            (meets_requirement, reason) tuple
+        """
+        if self._conservative_mode_active:
+            # Convert confidence to 0-1 scale if it's in 0-100 range
+            confidence_normalized = confidence / Decimal('100') if confidence > Decimal('1') else confidence
+            
+            if confidence_normalized < self._conservative_mode_min_confidence:
+                return False, (
+                    f"Conservative mode requires {self._conservative_mode_min_confidence*100:.0f}%+ confidence, "
+                    f"got {confidence_normalized*100:.1f}%"
+                )
+        
+        return True, ""
+
     
     @staticmethod
     def _get_next_reset_time() -> datetime:
@@ -412,5 +522,7 @@ class PortfolioRiskManager:
             "consecutive_losses": self._consecutive_losses,
             "trading_halted": self._trading_halted,
             "halt_reason": self._halt_reason,
-            "open_positions": len(self._positions)
+            "open_positions": len(self._positions),
+            "conservative_mode_active": self._conservative_mode_active,
+            "conservative_mode_min_confidence": float(self._conservative_mode_min_confidence * 100) if self._conservative_mode_active else None
         }

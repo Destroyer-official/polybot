@@ -27,6 +27,7 @@ class VoteWeight(Enum):
     TECHNICAL = 0.15  # 15% - Technical analysis
 
 
+
 @dataclass
 class ModelDecision:
     """Decision from a single model."""
@@ -60,7 +61,8 @@ class EnsembleDecisionEngine:
         rl_engine=None,
         historical_tracker=None,
         multi_tf_analyzer=None,
-        min_consensus: float = 5.0  # AGGRESSIVE: 5% for maximum trading
+        min_consensus: float = 15.0,  # BALANCED: 15% for more trading opportunities
+        fast_execution_engine=None
     ):
         """
         Initialize ensemble engine.
@@ -71,17 +73,32 @@ class EnsembleDecisionEngine:
             historical_tracker: Historical Success Tracker
             multi_tf_analyzer: Multi-Timeframe Analyzer
             min_consensus: Minimum consensus score to execute (0-100)
+            fast_execution_engine: FastExecutionEngine for decision caching
         """
         self.llm_engine = llm_engine
         self.rl_engine = rl_engine
         self.historical_tracker = historical_tracker
         self.multi_tf_analyzer = multi_tf_analyzer
         self.min_consensus = min_consensus
+        self.fast_execution_engine = fast_execution_engine
+        
+        # Validate model weights sum to 1.0
+        total_weight = sum(w.value for w in VoteWeight)
+        if abs(total_weight - 1.0) > 0.001:  # Allow small floating point error
+            raise ValueError(
+                f"Model weights must sum to 1.0, got {total_weight:.4f}. "
+                f"Weights: LLM={VoteWeight.LLM.value}, RL={VoteWeight.RL.value}, "
+                f"Historical={VoteWeight.HISTORICAL.value}, Technical={VoteWeight.TECHNICAL.value}"
+            )
         
         # Track ensemble performance
         self.total_decisions = 0
         self.high_consensus_decisions = 0
         self.executed_decisions = 0
+        
+        # Track approval metrics for threshold analysis
+        self.decisions_above_threshold = 0
+        self.decisions_below_threshold = 0
         
         logger.info("🎯 Ensemble Decision Engine initialized")
         logger.info(f"   Min consensus: {min_consensus}%")
@@ -120,18 +137,45 @@ class EnsembleDecisionEngine:
         # 1. Get LLM decision (40% weight)
         if self.llm_engine:
             try:
-                llm_decision = await self.llm_engine.make_decision(
-                    market_context, portfolio_state, opportunity_type
-                )
+                # Check cache first (60-second TTL)
+                cache_key = f"{asset}_{opportunity_type}"
+                cached_decision = None
                 
+                if self.fast_execution_engine:
+                    cached_decision = self.fast_execution_engine.get_decision(cache_key)
+                
+                if cached_decision:
+                    # Use cached LLM decision
+                    logger.info(f"🔄 Using cached LLM decision for {cache_key}")
+                    model_votes["LLM"] = cached_decision
+                else:
+                    # Fetch fresh LLM decision
+                    llm_decision = await self.llm_engine.make_decision(
+                        market_context, portfolio_state, opportunity_type
+                    )
+                    
+                    llm_vote = ModelDecision(
+                        model_name="LLM",
+                        action=llm_decision.action.value,
+                        confidence=llm_decision.confidence,
+                        reasoning=llm_decision.reasoning[:100]
+                    )
+                    
+                    model_votes["LLM"] = llm_vote
+                    
+                    # Cache the decision
+                    if self.fast_execution_engine:
+                        self.fast_execution_engine.set_decision(cache_key, llm_vote)
+                        logger.info(f"💾 Cached LLM decision for {cache_key}")
+                    
+            except Exception as e:
+                logger.warning(f"LLM decision failed: {e}, returning neutral vote")
                 model_votes["LLM"] = ModelDecision(
                     model_name="LLM",
-                    action=llm_decision.action.value,
-                    confidence=llm_decision.confidence,
-                    reasoning=llm_decision.reasoning[:100]
+                    action="skip",
+                    confidence=0.0,
+                    reasoning=f"Error: {str(e)[:80]}"
                 )
-            except Exception as e:
-                logger.warning(f"LLM decision failed: {e}")
         
         # 2. Get RL decision (25% weight)
         if self.rl_engine:
@@ -167,7 +211,13 @@ class EnsembleDecisionEngine:
                     reasoning=f"RL selected {strategy} strategy"
                 )
             except Exception as e:
-                logger.warning(f"RL decision failed: {e}")
+                logger.warning(f"RL decision failed: {e}, returning neutral vote")
+                model_votes["RL"] = ModelDecision(
+                    model_name="RL",
+                    action="skip",
+                    confidence=0.0,
+                    reasoning=f"Error: {str(e)[:80]}"
+                )
         
         # 3. Get Historical decision (20% weight)
         if self.historical_tracker:
@@ -186,7 +236,67 @@ class EnsembleDecisionEngine:
                     reasoning=hist_reason[:100]
                 )
             except Exception as e:
-                logger.warning(f"Historical decision failed: {e}")
+                logger.warning(f"Historical decision failed: {e}, returning neutral vote")
+                model_votes["Historical"] = ModelDecision(
+                    model_name="Historical",
+                    action="skip",
+                    confidence=0.0,
+                    reasoning=f"Error: {str(e)[:80]}"
+                )
+        
+        # Apply historical performance filtering (Task 3.6)
+        # Check win rate for strategy/asset combination and reduce confidence if poor
+        if self.historical_tracker:
+            try:
+                # Get strategy/asset specific stats
+                strategy_asset_key = f"{opportunity_type}_{asset}"
+                
+                # Get win rate from historical tracker
+                strategy_stats = self.historical_tracker.strategy_stats.get(opportunity_type, {})
+                asset_stats = self.historical_tracker.asset_stats.get(asset, {})
+                
+                # Calculate combined win rate (weighted average)
+                strategy_win_rate = strategy_stats.get("win_rate", 0.5) if strategy_stats.get("total_trades", 0) >= 5 else 0.5
+                asset_win_rate = asset_stats.get("win_rate", 0.5) if asset_stats.get("total_trades", 0) >= 5 else 0.5
+                combined_win_rate = (strategy_win_rate * 0.6) + (asset_win_rate * 0.4)
+                
+                # Apply filtering: reduce confidence by 20% if win rate < 40%
+                if combined_win_rate < 0.40 and strategy_stats.get("total_trades", 0) >= 5:
+                    logger.warning(
+                        f"⚠️ Historical Performance Filter: {opportunity_type}/{asset} has low win rate "
+                        f"({combined_win_rate*100:.1f}% < 40%) - reducing all model confidences by 20%"
+                    )
+                    
+                    # Reduce confidence for all models by 20%
+                    for model_name, vote in model_votes.items():
+                        original_confidence = vote.confidence
+                        vote.confidence = max(0.0, vote.confidence * 0.8)  # Reduce by 20%
+                        
+                        logger.info(
+                            f"   {model_name} confidence reduced: {original_confidence:.1f}% → {vote.confidence:.1f}%"
+                        )
+                    
+                    logger.info(
+                        f"   Strategy stats: {strategy_stats.get('winning_trades', 0)}/{strategy_stats.get('total_trades', 0)} trades "
+                        f"(win rate: {strategy_win_rate*100:.1f}%)"
+                    )
+                    logger.info(
+                        f"   Asset stats: {asset_stats.get('winning_trades', 0)}/{asset_stats.get('total_trades', 0)} trades "
+                        f"(win rate: {asset_win_rate*100:.1f}%)"
+                    )
+                elif strategy_stats.get("total_trades", 0) >= 5:
+                    logger.info(
+                        f"✅ Historical Performance Filter: {opportunity_type}/{asset} has good win rate "
+                        f"({combined_win_rate*100:.1f}% >= 40%) - no confidence reduction"
+                    )
+                else:
+                    logger.debug(
+                        f"ℹ️ Historical Performance Filter: Insufficient data for {opportunity_type}/{asset} "
+                        f"({strategy_stats.get('total_trades', 0)} trades) - no filtering applied"
+                    )
+                    
+            except Exception as e:
+                logger.warning(f"Historical performance filtering failed: {e}")
         
         # 4. Get Technical decision (15% weight)
         if self.multi_tf_analyzer:
@@ -208,7 +318,13 @@ class EnsembleDecisionEngine:
                     reasoning=f"Multi-TF: {direction} ({len(signals)} timeframes)"
                 )
             except Exception as e:
-                logger.warning(f"Technical decision failed: {e}")
+                logger.warning(f"Technical decision failed: {e}, returning neutral vote")
+                model_votes["Technical"] = ModelDecision(
+                    model_name="Technical",
+                    action="skip",
+                    confidence=0.0,
+                    reasoning=f"Error: {str(e)[:80]}"
+                )
         
         # Calculate ensemble decision
         ensemble_decision = self._calculate_ensemble(model_votes)
@@ -220,16 +336,36 @@ class EnsembleDecisionEngine:
         if ensemble_decision.action != "skip":
             self.executed_decisions += 1
         
+        # TASK 8.3: Enhanced ensemble vote logging with confidence scores
         logger.info(
-            f"🎯 Ensemble: {ensemble_decision.action.upper()} | "
+            f"🎯 Ensemble Decision: {ensemble_decision.action.upper()} | "
             f"Confidence: {ensemble_decision.confidence:.1f}% | "
             f"Consensus: {ensemble_decision.consensus_score:.1f}% | "
             f"Votes: {len(model_votes)}"
         )
         
-        # Log individual model votes for debugging
+        # TASK 8.3: Log detailed model votes with weights
+        logger.info("📊 Model Votes Breakdown:")
         for model_name, vote in model_votes.items():
-            logger.info(f"   {model_name}: {vote.action} ({vote.confidence:.0f}%) - {vote.reasoning[:80]}")
+            # Get model weight
+            if model_name == "LLM":
+                weight = VoteWeight.LLM.value
+            elif model_name == "RL":
+                weight = VoteWeight.RL.value
+            elif model_name == "Historical":
+                weight = VoteWeight.HISTORICAL.value
+            elif model_name == "Technical":
+                weight = VoteWeight.TECHNICAL.value
+            else:
+                weight = 0.1
+            
+            weighted_contribution = weight * (vote.confidence / 100.0) * 100
+            logger.info(
+                f"   {model_name} (weight={weight*100:.0f}%): "
+                f"{vote.action} | confidence={vote.confidence:.1f}% | "
+                f"contribution={weighted_contribution:.1f}% | "
+                f"reason: {vote.reasoning[:80]}"
+            )
         
         return ensemble_decision
     
@@ -291,6 +427,11 @@ class EnsembleDecisionEngine:
         # Select action with highest score
         final_action = max(action_scores, key=action_scores.get)
         final_score = action_scores[final_action]
+        
+        # If all scores are equal (or all zero), default to skip
+        if len(set(action_scores.values())) == 1:
+            final_action = "skip"
+            final_score = 0.0
         
         # Handle "neutral" votes (from historical tracker)
         if final_action == "neutral":
@@ -356,12 +497,15 @@ class EnsembleDecisionEngine:
             True if decision meets execution criteria
         """
         if decision.action == "skip":
+            logger.info(f"❌ Trade BLOCKED: Action is 'skip' (models recommend no trade)")
             return False
         
         # Require minimum consensus
         if decision.consensus_score < self.min_consensus:
-            logger.debug(
-                f"⏭️ Low consensus: {decision.consensus_score:.1f}% < {self.min_consensus}%"
+            self.decisions_below_threshold += 1
+            logger.info(
+                f"❌ Trade BLOCKED: Low consensus {decision.consensus_score:.1f}% < {self.min_consensus}% threshold | "
+                f"Action: {decision.action} | Confidence: {decision.confidence:.1f}%"
             )
             return False
         
@@ -369,10 +513,32 @@ class EnsembleDecisionEngine:
         # Even 1% confidence can be profitable with good risk/reward
         # The strategy will handle position sizing based on confidence
         if decision.confidence < 1.0:
-            logger.debug(f"⏭️ Extremely low confidence: {decision.confidence:.1f}%")
+            logger.info(
+                f"❌ Trade BLOCKED: Extremely low confidence {decision.confidence:.1f}% < 1.0% | "
+                f"Action: {decision.action} | Consensus: {decision.consensus_score:.1f}%"
+            )
             return False
         
+        # Trade approved
+        self.decisions_above_threshold += 1
+        logger.info(
+            f"✅ Trade APPROVED: Consensus {decision.consensus_score:.1f}% >= {self.min_consensus}% | "
+            f"Action: {decision.action} | Confidence: {decision.confidence:.1f}% | "
+            f"Approval rate: {self.get_approval_rate():.1f}%"
+        )
         return True
+    
+    def get_approval_rate(self) -> float:
+        """
+        Calculate the approval rate (percentage of decisions that pass threshold).
+        
+        Returns:
+            Approval rate as percentage (0-100)
+        """
+        total_threshold_checks = self.decisions_above_threshold + self.decisions_below_threshold
+        if total_threshold_checks == 0:
+            return 0.0
+        return (self.decisions_above_threshold / total_threshold_checks) * 100
     
     def get_performance_summary(self) -> str:
         """Get formatted performance summary."""
@@ -381,12 +547,14 @@ class EnsembleDecisionEngine:
         
         high_consensus_pct = (self.high_consensus_decisions / self.total_decisions) * 100
         execution_rate = (self.executed_decisions / self.total_decisions) * 100
+        approval_rate = self.get_approval_rate()
         
         summary = f"""Ensemble Performance:
 Total Decisions: {self.total_decisions}
 High Consensus (>70%): {self.high_consensus_decisions} ({high_consensus_pct:.1f}%)
 Execution Rate: {execution_rate:.1f}%
 Min Consensus: {self.min_consensus}%
+Approval Rate: {approval_rate:.1f}% ({self.decisions_above_threshold} approved, {self.decisions_below_threshold} blocked)
 """
         
         return summary

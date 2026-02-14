@@ -96,7 +96,7 @@ class TestTradeDecision:
         """Low confidence decisions should not execute."""
         decision = TradeDecision(
             action=TradeAction.BUY_BOTH,
-            confidence=50.0,
+            confidence=20.0,  # Below 25% threshold
             position_size=Decimal("2.00"),
             order_type=OrderType.FOK,
             limit_price=None,

@@ -95,7 +95,7 @@ class ReinforcementLearningEngine:
     def _load_q_table(self):
         """Load Q-table from disk."""
         if not self.data_file.exists():
-            logger.info("No Q-table found, starting fresh")
+            logger.info("🔄 No Q-table found, starting fresh")
             return
         
         try:
@@ -112,10 +112,24 @@ class ReinforcementLearningEngine:
             self.total_reward = data.get("total_reward", 0.0)
             self.exploration_rate = data.get("exploration_rate", self.exploration_rate)
             
-            logger.info(f"Loaded Q-table with {len(self.q_table)} states")
+            # TASK 8.3: Enhanced startup parameter logging
+            logger.info(
+                f"🔄 RL Parameters Loaded on Startup: "
+                f"states={len(self.q_table)} | "
+                f"episodes={self.total_episodes} | "
+                f"total_reward={self.total_reward:.3f} | "
+                f"exploration_rate={self.exploration_rate:.3f}"
+            )
+            
+            # Log top performing strategies
+            if self.q_table:
+                logger.info("📊 Top Q-values by state:")
+                for state_key in list(self.q_table.keys())[:5]:  # Show first 5 states
+                    best_strategy = max(self.q_table[state_key].items(), key=lambda x: x[1])
+                    logger.info(f"   {state_key}: {best_strategy[0]}={best_strategy[1]:.3f}")
             
         except Exception as e:
-            logger.error(f"Failed to load Q-table: {e}")
+            logger.error(f"❌ Failed to load Q-table: {e}")
     
     def _save_q_table(self):
         """Save Q-table to disk."""
@@ -329,16 +343,31 @@ class ReinforcementLearningEngine:
             self.exploration_rate * self.exploration_decay
         )
         
-        # Save periodically (every 10 episodes)
-        if self.total_episodes % 10 == 0:
-            self._save_q_table()
+        # CRITICAL FIX (Task 1.5): Save after EVERY trade to prevent data loss on crash
+        # Previously saved every 10 episodes, but this risks losing learning data
+        self._save_q_table()
         
-        logger.debug(
-            f"📊 RL Update: {strategy} | "
+        # TASK 8.3: Enhanced parameter update logging
+        q_change = new_q - current_q
+        logger.info(
+            f"🧠 RL Parameter Update: {asset}/{strategy} | "
             f"reward={reward:.3f} | "
-            f"Q: {current_q:.3f} → {new_q:.3f} | "
-            f"ε={self.exploration_rate:.3f}"
+            f"Q-value: {current_q:.3f} → {new_q:.3f} (Δ{q_change:+.3f}) | "
+            f"exploration_rate={self.exploration_rate:.3f} | "
+            f"episode={self.total_episodes} | "
+            f"state={current_key}"
         )
+        
+        # Log learning progress every 10 episodes
+        if self.total_episodes % 10 == 0:
+            avg_reward = sum(self.episode_rewards[-10:]) / min(10, len(self.episode_rewards))
+            logger.info(
+                f"📈 RL Learning Progress: "
+                f"episodes={self.total_episodes} | "
+                f"avg_reward_last_10={avg_reward:.3f} | "
+                f"total_reward={self.total_reward:.3f} | "
+                f"exploration_rate={self.exploration_rate:.3f}"
+            )
     
     def get_strategy_rankings(
         self,

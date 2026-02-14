@@ -30,7 +30,7 @@ This task list implements dynamic position sizing and smart fund management for 
   - [ ] 3.3 Implement fractional Kelly application
   - [ ] 3.4 Add detailed logging with `get_position_sizing_details()`
   - [ ] 3.5 Update unit tests for enhanced functionality
-  - [ ] 3.6 Add property-based tests for position size bounds
+  - [-] 3.6 Add property-based tests for position size bounds
 
 ### Phase 2: Fund Management
 

@@ -183,7 +183,12 @@ class SuperSmartLearning:
                 # We're exiting too early, raise target
                 old_tp = self.optimal_params["take_profit_pct"]
                 self.optimal_params["take_profit_pct"] = profit_pct * Decimal("0.9")
-                logger.info(f"   📈 Raising take-profit: {old_tp * 100:.1f}% → {self.optimal_params['take_profit_pct'] * 100:.1f}%")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 SuperSmart Parameter Update: take_profit_pct | "
+                    f"{old_tp * 100:.1f}% → {self.optimal_params['take_profit_pct'] * 100:.1f}% | "
+                    f"reason: profit {profit_pct * 100:.1f}% exceeded target by 50%"
+                )
         
         # Learn optimal stop-loss
         if not is_win and exit_reason == "stop_loss":
@@ -193,7 +198,12 @@ class SuperSmartLearning:
                 # Losses are too big, tighten stop
                 old_sl = self.optimal_params["stop_loss_pct"]
                 self.optimal_params["stop_loss_pct"] = abs(profit_pct) * Decimal("0.8")
-                logger.info(f"   🛑 Tightening stop-loss: {old_sl * 100:.1f}% → {self.optimal_params['stop_loss_pct'] * 100:.1f}%")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 SuperSmart Parameter Update: stop_loss_pct | "
+                    f"{old_sl * 100:.1f}% → {self.optimal_params['stop_loss_pct'] * 100:.1f}% | "
+                    f"reason: loss {abs(profit_pct) * 100:.1f}% exceeded limit by 50%"
+                )
         
         # Learn optimal hold time
         if is_win and hold_time_minutes < 8:
@@ -201,7 +211,12 @@ class SuperSmartLearning:
             old_time = self.optimal_params["time_exit_minutes"]
             self.optimal_params["time_exit_minutes"] = max(8, int(hold_time_minutes * 1.2))
             if old_time != self.optimal_params["time_exit_minutes"]:
-                logger.info(f"   ⏱️ Optimizing time exit: {old_time}min → {self.optimal_params['time_exit_minutes']}min")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 SuperSmart Parameter Update: time_exit_minutes | "
+                    f"{old_time}min → {self.optimal_params['time_exit_minutes']}min | "
+                    f"reason: quick win in {hold_time_minutes:.1f}min"
+                )
         
         # Learn position sizing
         if self.consecutive_wins >= 3:
@@ -212,7 +227,12 @@ class SuperSmartLearning:
                 self.optimal_params["position_size_multiplier"] * Decimal("1.1")
             )
             if old_mult != self.optimal_params["position_size_multiplier"]:
-                logger.info(f"   💪 Increasing position size: {old_mult} → {self.optimal_params['position_size_multiplier']}")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 SuperSmart Parameter Update: position_size_multiplier | "
+                    f"{old_mult:.2f} → {self.optimal_params['position_size_multiplier']:.2f} | "
+                    f"reason: hot streak ({self.consecutive_wins} consecutive wins)"
+                )
         
         elif self.consecutive_losses >= 2:
             # Cold streak! Decrease position size
@@ -222,7 +242,12 @@ class SuperSmartLearning:
                 self.optimal_params["position_size_multiplier"] * Decimal("0.9")
             )
             if old_mult != self.optimal_params["position_size_multiplier"]:
-                logger.info(f"   🔻 Decreasing position size: {old_mult} → {self.optimal_params['position_size_multiplier']}")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 SuperSmart Parameter Update: position_size_multiplier | "
+                    f"{old_mult:.2f} → {self.optimal_params['position_size_multiplier']:.2f} | "
+                    f"reason: cold streak ({self.consecutive_losses} consecutive losses)"
+                )
         
         # Pattern recognition
         pattern = f"{asset}_{side}_{strategy_used}"
@@ -407,7 +432,7 @@ class SuperSmartLearning:
         """Load learning data from disk."""
         try:
             if not self.data_file.exists():
-                logger.info("No existing learning data, starting fresh")
+                logger.info("🔄 No existing learning data, starting fresh")
                 return
             
             with open(self.data_file, 'r') as f:
@@ -451,7 +476,28 @@ class SuperSmartLearning:
             self.winning_patterns = data.get("winning_patterns", [])
             self.losing_patterns = data.get("losing_patterns", [])
             
-            logger.info(f"Loaded learning data: {self.total_trades} trades, {self.get_win_rate() * 100:.1f}% win rate")
+            # TASK 8.3: Enhanced startup parameter logging
+            logger.info(
+                f"🔄 SuperSmart Parameters Loaded on Startup: "
+                f"trades={self.total_trades} | "
+                f"win_rate={self.get_win_rate() * 100:.1f}% | "
+                f"total_profit=${self.total_profit:.2f}"
+            )
+            logger.info(
+                f"📊 Optimal Parameters: "
+                f"TP={self.optimal_params['take_profit_pct'] * 100:.1f}% | "
+                f"SL={self.optimal_params['stop_loss_pct'] * 100:.1f}% | "
+                f"time_exit={self.optimal_params['time_exit_minutes']}min | "
+                f"position_multiplier={self.optimal_params['position_size_multiplier']:.2f} | "
+                f"min_confidence={self.optimal_params['min_confidence'] * 100:.0f}%"
+            )
+            logger.info(
+                f"📈 Streaks: "
+                f"current_wins={self.consecutive_wins} | "
+                f"current_losses={self.consecutive_losses} | "
+                f"best_streak={self.best_win_streak} | "
+                f"worst_streak={self.worst_loss_streak}"
+            )
             
         except Exception as e:
-            logger.error(f"Failed to load learning data: {e}")
+            logger.error(f"❌ Failed to load learning data: {e}")

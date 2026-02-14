@@ -284,6 +284,7 @@ class LatencyArbitrageEngine:
         Check if Polymarket prices lag CEX movement.
         
         Validates Requirements:
+        - 3.3: Multi-timeframe signal confirmation (1m, 5m, 15m)
         - 4.3: Calculate expected market direction
         - 4.6: Skip when volatility > 5%
         
@@ -296,6 +297,74 @@ class LatencyArbitrageEngine:
         start_time = datetime.now()
         
         try:
+            # Multi-timeframe signal confirmation (Requirement 3.3)
+            timeframes = {
+                '1m': 60,    # 1 minute
+                '5m': 300,   # 5 minutes
+                '15m': 900   # 15 minutes
+            }
+            
+            timeframe_signals = {}
+            for tf_name, seconds in timeframes.items():
+                # Get price history for this timeframe
+                price_history = self._price_history.get(movement.asset, deque())
+                if not price_history:
+                    timeframe_signals[tf_name] = None
+                    continue
+                
+                # Calculate price change over this timeframe
+                cutoff_time = datetime.now() - timedelta(seconds=seconds)
+                relevant_prices = [
+                    (ts, price) for ts, price in price_history
+                    if ts >= cutoff_time
+                ]
+                
+                if len(relevant_prices) < 2:
+                    timeframe_signals[tf_name] = None
+                    continue
+                
+                old_price = relevant_prices[0][1]
+                new_price = relevant_prices[-1][1]
+                
+                if old_price == 0:
+                    timeframe_signals[tf_name] = None
+                    continue
+                
+                change_pct = abs(new_price - old_price) / old_price
+                
+                # Determine signal direction
+                if change_pct > Decimal('0.01'):  # 1% threshold
+                    if new_price > old_price:
+                        timeframe_signals[tf_name] = 'UP'
+                    else:
+                        timeframe_signals[tf_name] = 'DOWN'
+                else:
+                    timeframe_signals[tf_name] = 'NEUTRAL'
+            
+            # Count agreeing timeframes (Requirement 3.3: require 2+ agreeing)
+            up_count = sum(1 for sig in timeframe_signals.values() if sig == 'UP')
+            down_count = sum(1 for sig in timeframe_signals.values() if sig == 'DOWN')
+            
+            # Log timeframe signals
+            logger.info(
+                f"Multi-timeframe signals for {movement.asset}: "
+                f"1m={timeframe_signals.get('1m', 'N/A')}, "
+                f"5m={timeframe_signals.get('5m', 'N/A')}, "
+                f"15m={timeframe_signals.get('15m', 'N/A')} | "
+                f"UP={up_count}, DOWN={down_count}"
+            )
+            
+            # Require at least 2 timeframes agreeing
+            if up_count < 2 and down_count < 2:
+                logger.debug(
+                    f"Skipping {movement.asset}: insufficient timeframe agreement "
+                    f"(need 2+, got UP={up_count}, DOWN={down_count})"
+                )
+                return None
+            
+            # Determine consensus direction
+            consensus_direction = 'UP' if up_count >= 2 else 'DOWN'
+            
             # Check volatility first (Requirement 4.6)
             volatility = self._calculate_volatility(movement.asset)
             if volatility > self.MAX_VOLATILITY:
@@ -323,8 +392,8 @@ class LatencyArbitrageEngine:
                 if expected_price is None:
                     continue
                 
-                # Determine which side to trade based on direction
-                if movement.direction == "UP":
+                # Determine which side to trade based on consensus direction
+                if consensus_direction == "UP":
                     # CEX went up, expect YES price to rise
                     current_price = market.yes_price
                     trade_side = "YES"
@@ -386,7 +455,10 @@ class LatencyArbitrageEngine:
                 
                 logger.info(
                     f"Found latency arbitrage: {market.market_id} | "
-                    f"{movement.asset} {movement.direction} | "
+                    f"{movement.asset} {consensus_direction} (timeframes: "
+                    f"1m={timeframe_signals.get('1m', 'N/A')}, "
+                    f"5m={timeframe_signals.get('5m', 'N/A')}, "
+                    f"15m={timeframe_signals.get('15m', 'N/A')}) | "
                     f"Lag: {lag_percentage*100:.2f}% | "
                     f"Profit: ${expected_profit} ({profit_percentage*100:.2f}%) | "
                     f"Latency: {latency_ms:.0f}ms"

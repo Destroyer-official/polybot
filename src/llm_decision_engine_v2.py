@@ -58,7 +58,7 @@ class OrderType(Enum):
 
 @dataclass
 class MarketContext:
-    """Market context for LLM decision making."""
+    """Market context for LLM decision making - optimized for 15-minute markets."""
     market_id: str
     question: str
     asset: str
@@ -73,14 +73,65 @@ class MarketContext:
     recent_price_changes: Optional[List[Decimal]] = None
     binance_price: Optional[Decimal] = None
     binance_momentum: Optional[str] = None  # "bullish", "bearish", "neutral"
+    # NEW: Enhanced context for 15-minute markets
+    price_history_5min: Optional[List[Tuple[float, Decimal]]] = None  # [(minutes_ago, price), ...]
+    volatility_5min: Optional[Decimal] = None  # 5-minute volatility measure
+    price_velocity: Optional[Decimal] = None  # Rate of price change ($/min)
     
     def to_prompt_context(self, opportunity_type: str) -> str:
-        """Convert to string for LLM prompt based on opportunity type."""
+        """Convert to string for LLM prompt based on opportunity type - optimized for 15-min markets."""
+        # Calculate time urgency indicator
+        time_urgency = "🔴 URGENT" if self.time_to_resolution < 3 else "🟡 MODERATE" if self.time_to_resolution < 7 else "🟢 AMPLE"
+        
         base = f"""Market: {self.question}
 Asset: {self.asset}
 YES Price: ${self.yes_price:.4f}
 NO Price: ${self.no_price:.4f}
-Time to Resolution: {self.time_to_resolution:.1f} minutes"""
+Time to Resolution: {self.time_to_resolution:.1f} minutes {time_urgency}"""
+        
+        # Add 5-minute price history if available - with trend analysis
+        if self.price_history_5min and len(self.price_history_5min) >= 2:
+            history_str = " → ".join([f"${p:.4f}" for _, p in self.price_history_5min[-5:]])
+            base += f"\nPrice History (5min): {history_str}"
+            
+            # Calculate trend direction from price history
+            first_price = self.price_history_5min[0][1]
+            last_price = self.price_history_5min[-1][1]
+            price_change_pct = ((last_price - first_price) / first_price) * 100 if first_price > 0 else 0
+            
+            if abs(price_change_pct) > 1.0:
+                trend = "📈 STRONG UPTREND" if price_change_pct > 0 else "📉 STRONG DOWNTREND"
+            elif abs(price_change_pct) > 0.3:
+                trend = "↗️ UPTREND" if price_change_pct > 0 else "↘️ DOWNTREND"
+            else:
+                trend = "➡️ SIDEWAYS"
+            base += f"\n5-Min Trend: {price_change_pct:+.2f}% {trend}"
+        
+        # Add volatility measures with actionable interpretation
+        if self.volatility_5min is not None:
+            vol_pct = self.volatility_5min * 100
+            if vol_pct > 5.0:
+                vol_indicator = "📈 VERY HIGH (big moves expected)"
+            elif vol_pct > 2.0:
+                vol_indicator = "📊 HIGH (good profit potential)"
+            elif vol_pct > 1.0:
+                vol_indicator = "📊 NORMAL (moderate moves)"
+            else:
+                vol_indicator = "📉 LOW (small moves expected)"
+            base += f"\nVolatility (5min): {vol_pct:.2f}% {vol_indicator}"
+        
+        # Add price velocity (rate of change) with momentum interpretation
+        if self.price_velocity is not None:
+            velocity_per_min = float(self.price_velocity)
+            if abs(velocity_per_min) > 0.01:
+                velocity_indicator = "⚡ VERY FAST (strong momentum)" if abs(velocity_per_min) > 0.02 else "⚡ FAST (good momentum)"
+            elif abs(velocity_per_min) > 0.005:
+                velocity_indicator = "➡️ MODERATE (steady move)"
+            else:
+                velocity_indicator = "🐌 SLOW (weak momentum)"
+            
+            direction = "UP" if velocity_per_min > 0 else "DOWN"
+            base += f"\nPrice Velocity: ${velocity_per_min:.4f}/min {direction} {velocity_indicator}"
         
         if opportunity_type in ["arbitrage", "negrisk_arbitrage"]:
             return base + f"""
@@ -91,15 +142,17 @@ NO Liquidity: ${self.no_liquidity:.2f}"""
         
         elif opportunity_type == "directional_trend":
             momentum_str = f" ({self.binance_momentum})" if self.binance_momentum else ""
+            binance_price_str = f"${self.binance_price:.2f}" if self.binance_price is not None else "Unknown"
             return base + f"""
-Binance Price: ${self.binance_price:.2f}{momentum_str}
+Binance Price: {binance_price_str}{momentum_str}
 Recent Price Changes: {self.recent_price_changes if self.recent_price_changes else 'No data'}
 Market Sentiment: YES={self.yes_price*100:.1f}% | NO={self.no_price*100:.1f}%
-Volatility: {f'{self.volatility_1h*100:.2f}%' if self.volatility_1h else 'Unknown'}"""
+Volatility (1h): {f'{self.volatility_1h*100:.2f}%' if self.volatility_1h else 'Unknown'}"""
         
         elif opportunity_type == "latency_arbitrage":
+            binance_price_str = f"${self.binance_price:.2f}" if self.binance_price is not None else "Unknown"
             return base + f"""
-Binance Price: ${self.binance_price:.2f}
+Binance Price: {binance_price_str}
 Binance Momentum: {self.binance_momentum or 'Unknown'}
 Recent Price Changes: {self.recent_price_changes if self.recent_price_changes else 'No data'}
 Polymarket Lag: Potential front-running opportunity"""
@@ -202,19 +255,25 @@ Always respond with valid JSON only. Be AGGRESSIVE!"""
 
 Your role is to predict short-term price movements and take directional positions.
 
-CRITICAL RULES:
-1. Trade when Binance shows momentum > 0.03% in 10 seconds (AGGRESSIVE)
-2. Buy YES if Binance is rising (bullish momentum)
-3. Buy NO if Binance is falling (bearish momentum)
-4. If Binance is NEUTRAL (< 0.03% change), still consider trading if other signals are strong
-5. Target 3-10% profit in 15 minutes (REALISTIC)
-6. DO NOT vote "buy_both" for directional trades - that's for arbitrage only
+CRITICAL RULES FOR 15-MINUTE MARKETS:
+1. Time is critical - markets resolve in 15 minutes, so act fast on strong signals
+2. Trade when Binance shows momentum > 0.03% in 10 seconds (AGGRESSIVE)
+3. Buy YES if Binance is rising (bullish momentum)
+4. Buy NO if Binance is falling (bearish momentum)
+5. If Binance is NEUTRAL (< 0.03% change), still consider trading if other signals are strong
+6. Target 3-10% profit in remaining time (REALISTIC for 15-min)
+7. DO NOT vote "buy_both" for directional trades - that's for arbitrage only
+8. With < 3 minutes remaining, only trade if confidence > 80% (time risk)
+9. Price velocity matters - fast-moving prices indicate strong momentum
+10. Recent 5-minute price history shows trend strength
 
-DECISION FACTORS:
-- Binance momentum (trade if > 0.03%)
-- Recent price changes (volatility)
+DECISION FACTORS (prioritized for 15-min timeframe):
+- Time to expiry (< 3 min = high risk, > 7 min = good opportunity window)
+- Binance momentum (trade if > 0.03% in 10s)
+- Price velocity ($/min change rate - faster = stronger signal)
+- 5-minute volatility (high volatility = more profit potential but riskier)
+- Recent price history (consistent trend = higher confidence)
 - Market sentiment (current YES/NO prices)
-- Time to resolution (need 2+ minutes)
 
 OUTPUT FORMAT (JSON):
 {
@@ -223,7 +282,7 @@ OUTPUT FORMAT (JSON):
     "position_size_pct": 3-5,
     "order_type": "market",
     "limit_price": null,
-    "reasoning": "brief explanation focusing on momentum",
+    "reasoning": "brief explanation focusing on momentum and time urgency",
     "risk_assessment": "low|medium|high",
     "expected_profit_pct": 3-10
 }
@@ -234,18 +293,23 @@ Always respond with valid JSON only. Be AGGRESSIVE - trade on weak signals too!"
 
 Your role is to exploit the lag between Binance spot prices and Polymarket updates.
 
-CRITICAL RULES:
+CRITICAL RULES FOR 15-MINUTE MARKETS:
 1. Binance moves FIRST, Polymarket follows with 1-2 minute lag
 2. ANY Binance momentum (>0.03% in 10s) = tradeable opportunity (AGGRESSIVE)
-3. Target 1-3% profit by front-running the adjustment (REALISTIC)
+3. Target 1-3% profit by front-running the adjustment (REALISTIC for 15-min)
 4. Trade even with low confidence (15%+) for maximum opportunities
-5. Use MARKET orders for speed
-6. Exit quickly - hold time < 5 minutes
+5. Use MARKET orders for speed - every second counts
+6. Exit quickly - hold time < 5 minutes (critical for 15-min markets)
+7. Time urgency: With < 3 minutes to expiry, skip unless confidence > 90%
+8. Price velocity indicates adjustment speed - faster = better opportunity
+9. Recent 5-minute history shows if Polymarket is already adjusting
 
-STRATEGY:
+STRATEGY FOR 15-MINUTE TIMEFRAME:
 - Binance price surges → Buy YES before Polymarket adjusts up
 - Binance price drops → Buy NO before Polymarket adjusts down
-- Even weak Binance moves can be profitable
+- Even weak Binance moves can be profitable if caught early
+- Monitor price velocity - if Polymarket is already moving fast, opportunity may be gone
+- Check 5-min price history - if already adjusted, skip
 
 OUTPUT FORMAT (JSON):
 {
@@ -253,7 +317,7 @@ OUTPUT FORMAT (JSON):
     "confidence": 15-100,
     "position_size_pct": 2-5,
     "order_type": "market",
-    "reasoning": "brief explanation focusing on Binance signal",
+    "reasoning": "brief explanation focusing on Binance signal and time urgency",
     "risk_assessment": "low|medium|high",
     "expected_profit_pct": 1-3
 }
@@ -465,32 +529,51 @@ ARBITRAGE ANALYSIS:
 """
         
         elif opportunity_type == "directional_trend":
+            # Calculate time urgency for 15-minute markets
+            time_factor = "URGENT - ACT NOW" if market_context.time_to_resolution < 3 else \
+                         "MODERATE TIME" if market_context.time_to_resolution < 7 else \
+                         "AMPLE TIME"
+            
             prompt += f"""
-DIRECTIONAL ANALYSIS:
+DIRECTIONAL ANALYSIS (15-MINUTE MARKET):
 - Current Sentiment: YES={market_context.yes_price*100:.1f}% | NO={market_context.no_price*100:.1f}%
 - Binance Signal: {market_context.binance_momentum or 'Unknown'}
 - Recent Moves: {market_context.recent_price_changes if market_context.recent_price_changes else 'No data'}
-- Time Remaining: {market_context.time_to_resolution:.1f} minutes
+- Time Remaining: {market_context.time_to_resolution:.1f} minutes ({time_factor})
+- 5-Min Volatility: {f'{market_context.volatility_5min*100:.2f}%' if market_context.volatility_5min else 'Unknown'}
+- Price Velocity: {f'${market_context.price_velocity:.4f}/min' if market_context.price_velocity else 'Unknown'}
 
-DECISION CRITERIA:
-- Buy YES if Binance is BULLISH (price rising)
-- Buy NO if Binance is BEARISH (price falling)
-- SKIP if no clear momentum or insufficient time
+DECISION CRITERIA FOR 15-MIN MARKETS:
+- Buy YES if Binance is BULLISH (price rising) AND sufficient time remains
+- Buy NO if Binance is BEARISH (price falling) AND sufficient time remains
+- SKIP if < 3 minutes remaining (unless confidence > 80%)
+- SKIP if no clear momentum or price velocity is low
 - Target 5-15% profit in remaining time
+- Higher volatility = more profit potential but higher risk
 """
         
         elif opportunity_type == "latency_arbitrage":
+            # Calculate time urgency for 15-minute markets
+            time_factor = "CRITICAL - LAST CHANCE" if market_context.time_to_resolution < 3 else \
+                         "MODERATE WINDOW" if market_context.time_to_resolution < 7 else \
+                         "GOOD WINDOW"
+            
             prompt += f"""
-LATENCY ARBITRAGE ANALYSIS:
+LATENCY ARBITRAGE ANALYSIS (15-MINUTE MARKET):
 - Binance Momentum: {market_context.binance_momentum or 'Unknown'}
 - Recent Price Changes: {market_context.recent_price_changes if market_context.recent_price_changes else 'No data'}
 - Polymarket Current: YES=${market_context.yes_price:.4f} | NO=${market_context.no_price:.4f}
+- Time Remaining: {market_context.time_to_resolution:.1f} minutes ({time_factor})
+- Price Velocity: {f'${market_context.price_velocity:.4f}/min' if market_context.price_velocity else 'Unknown'}
+- 5-Min Volatility: {f'{market_context.volatility_5min*100:.2f}%' if market_context.volatility_5min else 'Unknown'}
 - Strategy: Front-run Polymarket price adjustment
 
-DECISION CRITERIA:
+DECISION CRITERIA FOR 15-MIN MARKETS:
 - Strong Binance UP move → Buy YES (Polymarket will adjust up)
 - Strong Binance DOWN move → Buy NO (Polymarket will adjust down)
-- Weak signal → SKIP (not worth the risk)
+- Check price velocity - if Polymarket already moving fast, may have missed opportunity
+- SKIP if < 3 minutes remaining (unless confidence > 90%)
+- Weak signal → SKIP (not worth the risk in short timeframe)
 """
         
         prompt += "\nAnalyze this opportunity and provide your trading decision as JSON."

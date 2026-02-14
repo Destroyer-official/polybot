@@ -29,6 +29,8 @@ class Order:
     order_type: str  # "FOK" (Fill-Or-Kill)
     slippage_tolerance: Decimal  # Maximum slippage (e.g., 0.001 = 0.1%)
     created_at: datetime
+    neg_risk: bool = True  # Default to True (most markets)
+    tick_size: str = "0.01"
     
     # Execution details
     filled: bool = False

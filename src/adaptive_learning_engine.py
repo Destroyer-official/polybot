@@ -301,13 +301,23 @@ class AdaptiveLearningEngine:
             if avg_winning_profit > float(self.current_params.take_profit_pct) * 1.5:
                 old_tp = self.current_params.take_profit_pct
                 self.current_params.take_profit_pct = Decimal(str(avg_winning_profit * 0.8))
-                logger.info(f"   📈 Raising take-profit: {old_tp * 100:.2f}% → {self.current_params.take_profit_pct * 100:.2f}%")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 Adaptive Parameter Update: take_profit_pct | "
+                    f"{old_tp * 100:.2f}% → {self.current_params.take_profit_pct * 100:.2f}% | "
+                    f"reason: avg winning profit {avg_winning_profit * 100:.2f}% exceeds target by 50%"
+                )
             
             # If average winning profit is close to take-profit, we're doing well
             elif avg_winning_profit < float(self.current_params.take_profit_pct) * 0.7:
                 old_tp = self.current_params.take_profit_pct
                 self.current_params.take_profit_pct = Decimal(str(avg_winning_profit * 1.1))
-                logger.info(f"   📉 Lowering take-profit: {old_tp * 100:.2f}% → {self.current_params.take_profit_pct * 100:.2f}%")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 Adaptive Parameter Update: take_profit_pct | "
+                    f"{old_tp * 100:.2f}% → {self.current_params.take_profit_pct * 100:.2f}% | "
+                    f"reason: avg winning profit {avg_winning_profit * 100:.2f}% below target"
+                )
         
         # Adapt stop-loss threshold
         losing_trades = [t for t in recent_trades if t.profit_pct < 0]
@@ -318,7 +328,12 @@ class AdaptiveLearningEngine:
             if avg_losing_loss > float(self.current_params.stop_loss_pct) * 1.5:
                 old_sl = self.current_params.stop_loss_pct
                 self.current_params.stop_loss_pct = Decimal(str(avg_losing_loss * 0.8))
-                logger.info(f"   🛑 Tightening stop-loss: {old_sl * 100:.2f}% → {self.current_params.stop_loss_pct * 100:.2f}%")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 Adaptive Parameter Update: stop_loss_pct | "
+                    f"{old_sl * 100:.2f}% → {self.current_params.stop_loss_pct * 100:.2f}% | "
+                    f"reason: avg loss {avg_losing_loss * 100:.2f}% exceeds limit by 50%"
+                )
         
         # Adapt position sizing based on win rate
         if recent_win_rate > 0.7:  # >70% win rate
@@ -329,7 +344,12 @@ class AdaptiveLearningEngine:
                 self.current_params.position_size_multiplier * Decimal("1.1")
             )
             if old_mult != self.current_params.position_size_multiplier:
-                logger.info(f"   💪 Increasing position size: {old_mult} → {self.current_params.position_size_multiplier}")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 Adaptive Parameter Update: position_size_multiplier | "
+                    f"{old_mult:.2f} → {self.current_params.position_size_multiplier:.2f} | "
+                    f"reason: high win rate {recent_win_rate * 100:.1f}% (>70%)"
+                )
         
         elif recent_win_rate < 0.5:  # <50% win rate
             # Decrease position size
@@ -339,7 +359,12 @@ class AdaptiveLearningEngine:
                 self.current_params.position_size_multiplier * Decimal("0.9")
             )
             if old_mult != self.current_params.position_size_multiplier:
-                logger.info(f"   🔻 Decreasing position size: {old_mult} → {self.current_params.position_size_multiplier}")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 Adaptive Parameter Update: position_size_multiplier | "
+                    f"{old_mult:.2f} → {self.current_params.position_size_multiplier:.2f} | "
+                    f"reason: low win rate {recent_win_rate * 100:.1f}% (<50%)"
+                )
         
         # Adapt time exit based on successful trades
         successful_quick_exits = [t for t in winning_trades if t.hold_time_minutes < 10]
@@ -347,7 +372,12 @@ class AdaptiveLearningEngine:
             old_time = self.current_params.time_exit_minutes
             self.current_params.time_exit_minutes = max(8, int(self.current_params.time_exit_minutes * 0.9))
             if old_time != self.current_params.time_exit_minutes:
-                logger.info(f"   ⏱️ Shortening time exit: {old_time}min → {self.current_params.time_exit_minutes}min")
+                # TASK 8.3: Enhanced parameter update logging
+                logger.info(
+                    f"🧠 Adaptive Parameter Update: time_exit_minutes | "
+                    f"{old_time}min → {self.current_params.time_exit_minutes}min | "
+                    f"reason: {len(successful_quick_exits)}/{len(winning_trades)} wins are quick (<10min)"
+                )
         
         logger.info(f"   ✅ Parameters adapted based on performance")
     
@@ -645,7 +675,26 @@ class AdaptiveLearningEngine:
                 )
                 self.trade_outcomes.append(outcome)
             
-            logger.info(f"Loaded learning data: {self.total_trades} trades, {self.get_win_rate() * 100:.1f}% win rate")
+            # TASK 8.3: Enhanced startup parameter logging
+            logger.info(
+                f"🔄 Adaptive Parameters Loaded on Startup: "
+                f"trades={self.total_trades} | "
+                f"win_rate={self.get_win_rate() * 100:.1f}% | "
+                f"total_profit=${self.total_profit:.2f}"
+            )
+            logger.info(
+                f"📊 Current Parameters: "
+                f"TP={self.current_params.take_profit_pct * 100:.2f}% | "
+                f"SL={self.current_params.stop_loss_pct * 100:.2f}% | "
+                f"time_exit={self.current_params.time_exit_minutes}min | "
+                f"position_multiplier={self.current_params.position_size_multiplier:.2f} | "
+                f"confidence_threshold={self.current_params.confidence_threshold * 100:.0f}%"
+            )
+            logger.info(
+                f"📈 Streaks: "
+                f"current_wins={self.consecutive_wins} | "
+                f"current_losses={self.consecutive_losses}"
+            )
             
         except Exception as e:
             logger.error(f"Failed to load learning data: {e}")
